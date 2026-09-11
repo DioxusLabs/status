@@ -1,8 +1,38 @@
-[package]
-name = "dioxus-status-repo"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
+members = [
+    "packages/status",
+    "vendor/dioxus-primitives",
+    "vendor/dioxus-attributes",
+    "vendor/dioxus-sdk-time",
+]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace.dependencies]
+dioxus = "0.8.0-alpha.1"
+dioxus-rsx = "0.8.0-alpha.1"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "macros", "migrate"] }
+octocrab = "0.44"
+time = "0.3"
+dioxus-primitives = { path = "vendor/dioxus-primitives" }
 
-[dependencies]
+[profile.release]
+opt-level = "z"
+debug = false
+lto = true
+codegen-units = 1
+strip = true
+incremental = false
+
+[profile.dev]
+debug = 0
+
+[profile.dev.build-override]
+opt-level = 3
+codegen-units = 1

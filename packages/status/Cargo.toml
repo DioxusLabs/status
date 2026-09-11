@@ -1,0 +1,49 @@
+[package]
+name = "dioxus-status"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dioxus = { workspace = true, features = ["router", "fullstack"] }
+dioxus-fullstack = "0.8.0-alpha.1"
+dioxus-primitives = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+
+# server-only
+tokio = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+octocrab = { workspace = true, optional = true }
+dotenvy = { version = "0.15", optional = true }
+axum = { version = "0.8", optional = true }
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
+
+[dev-dependencies]
+dioxus-ssr = "0.8.0-alpha.1"
+
+[features]
+default = []
+web = ["dioxus/web", "dioxus-primitives/web", "dep:gloo-timers"]
+server = [
+    "dioxus/server",
+    "dioxus/fullstack",
+    "dep:sqlx",
+    "dep:octocrab",
+    "dep:tokio",
+    "dep:reqwest",
+    "dep:dotenvy",
+    "dep:axum",
+    "dep:hmac",
+    "dep:sha2",
+    "dep:hex",
+    "dep:tracing-subscriber",
+]
