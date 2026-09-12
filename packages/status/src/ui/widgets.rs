@@ -168,6 +168,33 @@ pub fn PrSummaryList(title: &'static str, items: Vec<PrSummary>, empty: &'static
     }
 }
 
+/// A checkbox for rows inside a DropdownMenuContent. Unlike the vendored
+/// Checkbox, it never moves DOM focus on click — the menu trigger's blur
+/// handler closes the menu whenever focus leaves it.
+#[component]
+pub fn MenuCheckbox(checked: bool, disabled: bool, on_change: EventHandler<bool>) -> Element {
+    rsx! {
+        button {
+            r#type: "button",
+            class: "dx-checkbox",
+            role: "checkbox",
+            aria_checked: if checked { "true" } else { "false" },
+            "data-state": if checked { "checked" } else { "unchecked" },
+            tabindex: "-1",
+            disabled: disabled,
+            onclick: move |e| {
+                e.stop_propagation();
+                on_change.call(!checked);
+            },
+            span { class: "dx-checkbox-indicator",
+                if checked {
+                    crate::components::icons::Check { size: "1rem" }
+                }
+            }
+        }
+    }
+}
+
 pub fn assoc_label(a: &str) -> &'static str {
     match a {
         "MEMBER" | "OWNER" => "maintainer",

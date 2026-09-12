@@ -1,11 +1,9 @@
 use dioxus::prelude::*;
-use dioxus_primitives::checkbox::CheckboxState;
 
 use super::cache::use_cached;
 use super::layout::AdminState;
-use super::widgets::{assoc_label, CiDot, ScoreBadge};
+use super::widgets::{assoc_label, CiDot, MenuCheckbox, ScoreBadge};
 use crate::api;
-use crate::components::checkbox::Checkbox;
 use crate::components::dropdown_menu::{DropdownMenu, DropdownMenuContent, DropdownMenuTrigger};
 use crate::components::input::Input;
 use crate::components::select::{Select, SelectOption};
@@ -580,34 +578,35 @@ fn urldecode(s: &str) -> String {
 /// without closing the menu.
 #[component]
 fn ColItem(id: &'static str, label: &'static str, mut columns: Signal<Vec<String>>) -> Element {
-    let state = use_memo(move || {
-        Some(if columns().iter().any(|c| c.as_str() == id) {
-            CheckboxState::Checked
-        } else {
-            CheckboxState::Unchecked
-        })
-    });
+    let checked = use_memo(move || columns().iter().any(|c| c.as_str() == id));
     let fixed = id == "title";
+    let toggle = EventHandler::new(move |on: bool| {
+        let mut cur = columns();
+        if on {
+            if !cur.iter().any(|c| c.as_str() == id) {
+                cur = PR_COLUMNS
+                    .iter()
+                    .map(|(cid, _)| cid.to_string())
+                    .filter(|cid| cid == id || cur.contains(cid))
+                    .collect();
+            }
+        } else {
+            cur.retain(|c| c != id);
+        }
+        columns.set(cur);
+    });
     rsx! {
-        label { class: "colrow",
-            Checkbox {
-                checked: state,
+        div {
+            class: "colrow",
+            onclick: move |_| {
+                if !fixed {
+                    toggle.call(!checked());
+                }
+            },
+            MenuCheckbox {
+                checked: checked(),
                 disabled: fixed,
-                on_checked_change: move |s: CheckboxState| {
-                    let mut cur = columns();
-                    if s == CheckboxState::Checked {
-                        if !cur.iter().any(|c| c.as_str() == id) {
-                            cur = PR_COLUMNS
-                                .iter()
-                                .map(|(cid, _)| cid.to_string())
-                                .filter(|cid| cid == id || cur.contains(cid))
-                                .collect();
-                        }
-                    } else {
-                        cur.retain(|c| c != id);
-                    }
-                    columns.set(cur);
-                },
+                on_change: toggle,
             }
             "{label}"
         }

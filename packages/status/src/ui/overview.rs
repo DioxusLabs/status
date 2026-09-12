@@ -1,16 +1,48 @@
 use dioxus::prelude::*;
 
 use super::cache::use_cached;
+use super::widgets::MenuCheckbox;
 use super::widgets::{format_compact, PrSummaryList};
 use crate::api;
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::components::checkbox::Checkbox;
 use crate::components::dropdown_menu::{DropdownMenu, DropdownMenuContent, DropdownMenuTrigger};
-use dioxus_primitives::checkbox::CheckboxState;
+use serde::{Deserialize, Serialize};
+
+/// Explicit selection model for the repo filter. `All` means the unified
+/// cross-repo view (sent to the server as `None`); `Some(vec![])` means
+/// nothing selected.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+enum RepoFilter {
+    All,
+    Some(Vec<String>),
+}
+
+impl RepoFilter {
+    fn to_api(&self) -> Option<Vec<String>> {
+        match self {
+            RepoFilter::All => None,
+            RepoFilter::Some(repos) => Some(repos.clone()),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            RepoFilter::All => "All repos".into(),
+            RepoFilter::Some(repos) => match repos.len() {
+                0 => "No repos".into(),
+                1 => repos[0]
+                    .strip_prefix("DioxusLabs/")
+                    .unwrap_or(&repos[0])
+                    .to_string(),
+                n => format!("{n} repos"),
+            },
+        }
+    }
+}
 
 #[component]
 pub fn Overview() -> Element {
-    let mut selected = use_signal(Vec::<String>::new);
+    let mut selected = use_signal(|| RepoFilter::All);
     let mut menu_open = use_signal(|| Some(false));
     #[cfg(feature = "web")]
     let mut repos_loaded = use_signal(|| false);
@@ -26,7 +58,7 @@ pub fn Overview() -> Element {
                     .map(|v| v.as_str().unwrap_or_default().to_string())
                 {
                     if let Some(saved) = (!v.is_empty())
-                        .then(|| serde_json::from_str::<Vec<String>>(&v).ok())
+                        .then(|| serde_json::from_str::<RepoFilter>(&v).ok())
                         .flatten()
                     {
                         selected.set(saved);
@@ -55,30 +87,15 @@ pub fn Overview() -> Element {
             )
         },
         move || {
-            let repos = selected();
+            let repos = selected().to_api();
             async move { api::get_overview(repos).await }
         },
     )?;
     let mut repo_options = (repos.value)().unwrap_or_default();
     repo_options.retain(|r| r.monitored);
     repo_options.sort_by_key(|r| std::cmp::Reverse(r.stars));
-    let selected_count = selected()
-        .iter()
-        .filter(|r| r.as_str() != "__none__")
-        .count();
-    let filter_label = if selected().is_empty() {
-        "All repos".to_string()
-    } else if selected().iter().any(|r| r == "__none__") {
-        "0 repos".to_string()
-    } else if selected_count == 1 {
-        selected()
-            .iter()
-            .find(|r| r.as_str() != "__none__")
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        format!("{selected_count} repos")
-    };
+    let filter_label = selected().label();
+    let monitored_names: Vec<String> = repo_options.iter().map(|r| r.name.clone()).collect();
     let Some(o) = (overview.value)() else {
         return rsx! { div { class: "page", h1 { "Overview" } } };
     };
@@ -100,13 +117,13 @@ pub fn Overview() -> Element {
                             Button {
                                 variant: ButtonVariant::Ghost,
                                 size: ButtonSize::Xs,
-                                onclick: move |_| selected.set(Vec::new()),
+                                onclick: move |_| selected.set(RepoFilter::All),
                                 "select all"
                             }
                             Button {
                                 variant: ButtonVariant::Ghost,
                                 size: ButtonSize::Xs,
-                                onclick: move |_| selected.set(vec!["__none__".to_string()]),
+                                onclick: move |_| selected.set(RepoFilter::Some(Vec::new())),
                                 "deselect all"
                             }
                         }
@@ -115,6 +132,7 @@ pub fn Overview() -> Element {
                                 key: "{repo.name}",
                                 name: repo.name.clone(),
                                 selected: selected,
+                                monitored: monitored_names.clone(),
                             }
                         }
                     }
@@ -150,37 +168,46 @@ pub fn Overview() -> Element {
 }
 
 #[component]
-fn OverviewRepoItem(name: String, mut selected: Signal<Vec<String>>) -> Element {
+fn OverviewRepoItem(
+    name: String,
+    mut selected: Signal<RepoFilter>,
+    monitored: Vec<String>,
+) -> Element {
     let state_name = name.clone();
-    let state = use_memo(move || {
-        Some(
-            if selected().is_empty() || selected().iter().any(|repo| repo == &state_name) {
-                CheckboxState::Checked
-            } else {
-                CheckboxState::Unchecked
-            },
-        )
+    let checked = use_memo(move || match selected() {
+        RepoFilter::All => true,
+        RepoFilter::Some(repos) => repos.iter().any(|repo| repo == &state_name),
     });
     let label = name
         .strip_prefix("DioxusLabs/")
         .unwrap_or(&name)
         .to_string();
+    let toggle = EventHandler::new(move |on: bool| {
+        let mut repos = match selected() {
+            RepoFilter::All => monitored.clone(),
+            RepoFilter::Some(repos) => repos,
+        };
+        if on {
+            if !repos.iter().any(|repo| repo == &name) {
+                repos.push(name.clone());
+            }
+        } else {
+            repos.retain(|repo| repo != &name);
+        }
+        selected.set(if monitored.iter().all(|m| repos.contains(m)) {
+            RepoFilter::All
+        } else {
+            RepoFilter::Some(repos)
+        });
+    });
     rsx! {
-        label { class: "colrow",
-            Checkbox {
-                checked: state,
-                on_checked_change: move |state: CheckboxState| {
-                    let mut repos = selected();
-                    repos.retain(|repo| repo != "__none__");
-                    if state == CheckboxState::Checked {
-                        if !repos.iter().any(|repo| repo == &name) {
-                            repos.push(name.clone());
-                        }
-                    } else {
-                        repos.retain(|repo| repo != &name);
-                    }
-                    selected.set(repos);
-                },
+        div {
+            class: "colrow",
+            onclick: move |_| toggle.call(!checked()),
+            MenuCheckbox {
+                checked: checked(),
+                disabled: false,
+                on_change: toggle,
             }
             "{label}"
         }

@@ -29,59 +29,49 @@ fn pr_summary(p: &db::DbPr) -> PrSummary {
 }
 
 #[post("/api/overview")]
-pub async fn get_overview(repos: Vec<String>) -> Result<Overview> {
+pub async fn get_overview(repos: Option<Vec<String>>) -> Result<Overview> {
     let mut o = Overview::default();
-    let pool = db::pool();
-    let (name_clause, _) = repo_clause("name", &repos);
-    let (repo_clause, repo_binds) = repo_clause("repo", &repos);
+    let (name_clause, _) = repo_clause("name", repos.as_deref());
+    let (repo_clause, repo_binds) = repo_clause("repo", repos.as_deref());
 
-    o.monitored_repos = sqlx::query_scalar("SELECT COUNT(*) FROM repos WHERE monitored = 1")
-        .fetch_one(pool)
-        .await?;
-    let sql = format!("SELECT COUNT(*) FROM pull_requests WHERE state = 'open'{repo_clause}");
-    let mut q = sqlx::query_scalar::<_, i64>(&sql);
-    for bind in &repo_binds {
-        q = q.bind(bind);
-    }
-    o.open_prs = q.fetch_one(pool).await?;
-    let sql = format!("SELECT COUNT(*) FROM issues WHERE state = 'open'{repo_clause}");
-    let mut q = sqlx::query_scalar::<_, i64>(&sql);
-    for bind in &repo_binds {
-        q = q.bind(bind);
-    }
-    o.open_issues = q.fetch_one(pool).await?;
-    let sql = format!("SELECT COALESCE(SUM(stars),0) FROM repos WHERE monitored = 1{name_clause}");
-    let mut q = sqlx::query_scalar::<_, i64>(&sql);
-    for bind in &repo_binds {
-        q = q.bind(bind);
-    }
-    o.total_stars = q.fetch_one(pool).await?;
-    let sql = format!(
-        "SELECT COALESCE(SUM(d.downloads),0) FROM crate_downloads_daily d
+    o.monitored_repos = scalar("SELECT COUNT(*) FROM repos WHERE monitored = 1", &[]).await?;
+    o.open_prs = scalar(
+        &format!("SELECT COUNT(*) FROM pull_requests WHERE state = 'open'{repo_clause}"),
+        &repo_binds,
+    )
+    .await?;
+    o.open_issues = scalar(
+        &format!("SELECT COUNT(*) FROM issues WHERE state = 'open'{repo_clause}"),
+        &repo_binds,
+    )
+    .await?;
+    o.total_stars = scalar(
+        &format!("SELECT COALESCE(SUM(stars),0) FROM repos WHERE monitored = 1{name_clause}"),
+        &repo_binds,
+    )
+    .await?;
+    o.downloads_7d = scalar(
+        &format!(
+            "SELECT COALESCE(SUM(d.downloads),0) FROM crate_downloads_daily d
          JOIN crates c ON c.name = d.crate_name
          WHERE d.date >= date('now', '-7 days'){repo_clause}"
-    );
-    let mut q = sqlx::query_scalar::<_, i64>(&sql);
-    for bind in &repo_binds {
-        q = q.bind(bind);
-    }
-    o.downloads_7d = q.fetch_one(pool).await?;
-    let sql = format!("SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause})");
-    let mut q = sqlx::query_scalar::<_, bool>(&sql);
-    for bind in &repo_binds {
-        q = q.bind(bind);
-    }
-    let has_week_old_snapshot = q.fetch_one(pool).await?;
+        ),
+        &repo_binds,
+    )
+    .await?;
+    let has_week_old_snapshot: bool = scalar(
+        &format!("SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause})"),
+        &repo_binds,
+    )
+    .await?;
     if has_week_old_snapshot {
-        let sql = format!("SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE 1=1{repo_clause}){repo_clause})
-                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause}){repo_clause})");
-        let mut q = sqlx::query_scalar::<_, Option<i64>>(&sql);
-        for _ in 0..4 {
-            for bind in &repo_binds {
-                q = q.bind(bind);
-            }
-        }
-        o.stars_7d_delta = q.fetch_one(pool).await?;
+        let delta_binds: Vec<String> = (0..4).flat_map(|_| repo_binds.iter().cloned()).collect();
+        o.stars_7d_delta = scalar(
+            &format!("SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE 1=1{repo_clause}){repo_clause})
+                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause}){repo_clause})"),
+            &delta_binds,
+        )
+        .await?;
     }
 
     o.ready_to_merge = top_prs(
@@ -124,14 +114,29 @@ pub async fn get_overview(repos: Vec<String>) -> Result<Overview> {
 }
 
 #[cfg(feature = "server")]
-fn repo_clause(column: &str, repos: &[String]) -> (String, Vec<String>) {
-    if repos.is_empty() {
+fn repo_clause(column: &str, repos: Option<&[String]>) -> (String, Vec<String>) {
+    let Some(repos) = repos else {
         return (String::new(), Vec::new());
+    };
+    if repos.is_empty() {
+        return (" AND 1=0".into(), Vec::new());
     }
     let placeholders = std::iter::repeat_n("?", repos.len())
         .collect::<Vec<_>>()
         .join(",");
     (format!(" AND {column} IN ({placeholders})"), repos.to_vec())
+}
+
+#[cfg(feature = "server")]
+async fn scalar<T>(sql: &str, binds: &[String]) -> anyhow::Result<T>
+where
+    T: for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite> + Send + Unpin,
+{
+    let mut query = sqlx::query_scalar::<_, T>(sql);
+    for bind in binds {
+        query = query.bind(bind);
+    }
+    Ok(query.fetch_one(db::pool()).await?)
 }
 
 #[cfg(feature = "server")]
