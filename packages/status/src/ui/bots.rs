@@ -5,32 +5,7 @@ use crate::api;
 use crate::components::badge::{Badge, BadgeVariant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::dialog::Dialog;
-use crate::model::AssessmentView;
-
-const ACTION_KINDS: &[&str] = &[
-    "rebase",
-    "address_reviews",
-    "deslop",
-    "add_tests",
-    "deep_review",
-    "split",
-    "changelog_entry",
-];
-
-fn kind_label(k: &str) -> &'static str {
-    match k {
-        "assess" => "Assess",
-        "rebase" => "Rebase",
-        "address_reviews" => "Address reviews",
-        "deslop" => "Deslop",
-        "add_tests" => "Add tests",
-        "deep_review" => "Deep review",
-        "split" => "Split",
-        "changelog_entry" => "Changelog entry",
-        "custom" => "Custom",
-        _ => "?",
-    }
-}
+use crate::model::{ActionKind, AssessmentView};
 
 #[component]
 fn StatusBadge(status: String) -> Element {
@@ -81,9 +56,9 @@ pub fn DevinPanel(repo: String, number: i64) -> Element {
     let admin = use_resource(|| async move { api::is_admin().await.unwrap_or(false) });
 
     let repo_d = repo.clone();
-    let mut dispatch = use_action(move |(kind, custom): (String, Option<String>)| {
+    let mut dispatch = use_action(move |(kind, custom): (ActionKind, Option<String>)| {
         let repo = repo_d.clone();
-        async move { api::dispatch_action(repo, number, kind, custom).await }
+        async move { api::dispatch_action(repo, number, kind.to_string(), custom).await }
     });
     let repo_a = repo.clone();
     let mut assess = use_action(move |force: bool| {
@@ -160,14 +135,14 @@ pub fn DevinPanel(repo: String, number: i64) -> Element {
                             "re-run"
                         }
                     }
-                    for k in ACTION_KINDS {
+                    for k in ActionKind::ALL.iter().filter(|k| k.is_dispatchable()) {
                         Button {
                             key: "{k}",
                             variant: ButtonVariant::Outline,
                             size: ButtonSize::Sm,
                             disabled: pending,
-                            onclick: move |_| dispatch.call((k.to_string(), None)),
-                            "{kind_label(k)}"
+                            onclick: move |_| dispatch.call((*k, None)),
+                            "{k.label()}"
                         }
                     }
                     Button {
@@ -195,7 +170,7 @@ pub fn DevinPanel(repo: String, number: i64) -> Element {
                             size: ButtonSize::Sm,
                             disabled: pending || custom_text().trim().is_empty(),
                             onclick: move |_| {
-                                dispatch.call(("custom".into(), Some(custom_text())));
+                                dispatch.call((ActionKind::Custom, Some(custom_text())));
                                 custom_open.set(false);
                             },
                             "Dispatch"

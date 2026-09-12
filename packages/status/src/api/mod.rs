@@ -565,7 +565,8 @@ pub async fn dispatch_action(
     custom_prompt: Option<String>,
 ) -> Result<DevinSessionRow> {
     auth::require_admin()?;
-    actions::dispatch(&repo, number, &kind, custom_prompt.as_deref())
+    let kind: ActionKind = kind.parse()?;
+    actions::dispatch(&repo, number, kind, custom_prompt.as_deref())
         .await
         .map_err(Into::into)
 }
@@ -722,10 +723,10 @@ pub async fn add_release_target(
     title: String,
 ) -> Result<()> {
     auth::require_admin()?;
-    if !matches!(kind.as_str(), "pr" | "issue" | "note") {
-        return Err(ServerFnError::new(format!("bad kind '{kind}'")).into());
-    }
-    db::add_release_target(&repo, &version, &kind, number, title)
+    let kind = kind
+        .parse::<TargetKind>()
+        .map_err(|e: anyhow::Error| ServerFnError::new(e.to_string()))?;
+    db::add_release_target(&repo, &version, kind.as_str(), number, title)
         .await
         .map_err(Into::into)
 }

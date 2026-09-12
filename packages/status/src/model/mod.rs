@@ -372,6 +372,203 @@ pub fn cadence_days(dates: &[String]) -> Option<i64> {
     Some(gaps[gaps.len() / 2])
 }
 
+/// Devin work action. Stored as snake_case `kind` TEXT and sent over the wire
+/// the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionKind {
+    Assess,
+    Rebase,
+    AddressReviews,
+    Deslop,
+    AddTests,
+    DeepReview,
+    Split,
+    ChangelogEntry,
+    Custom,
+}
+
+impl ActionKind {
+    pub const ALL: &'static [ActionKind] = &[
+        ActionKind::Assess,
+        ActionKind::Rebase,
+        ActionKind::AddressReviews,
+        ActionKind::Deslop,
+        ActionKind::AddTests,
+        ActionKind::DeepReview,
+        ActionKind::Split,
+        ActionKind::ChangelogEntry,
+        ActionKind::Custom,
+    ];
+    /// Actions offered as dispatch buttons (assess and custom have their own UI).
+    pub fn is_dispatchable(&self) -> bool {
+        !matches!(self, ActionKind::Assess | ActionKind::Custom)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ActionKind::Assess => "assess",
+            ActionKind::Rebase => "rebase",
+            ActionKind::AddressReviews => "address_reviews",
+            ActionKind::Deslop => "deslop",
+            ActionKind::AddTests => "add_tests",
+            ActionKind::DeepReview => "deep_review",
+            ActionKind::Split => "split",
+            ActionKind::ChangelogEntry => "changelog_entry",
+            ActionKind::Custom => "custom",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ActionKind::Assess => "Assess",
+            ActionKind::Rebase => "Rebase",
+            ActionKind::AddressReviews => "Address reviews",
+            ActionKind::Deslop => "Deslop",
+            ActionKind::AddTests => "Add tests",
+            ActionKind::DeepReview => "Deep review",
+            ActionKind::Split => "Split",
+            ActionKind::ChangelogEntry => "Changelog entry",
+            ActionKind::Custom => "Custom",
+        }
+    }
+
+    /// Whether the action requires a free-text prompt instead of a fixed body.
+    /// Only used server-side where prompt bodies live.
+    #[cfg(feature = "server")]
+    pub fn needs_prompt(&self) -> bool {
+        matches!(self, ActionKind::Custom)
+    }
+}
+
+impl std::fmt::Display for ActionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ActionKind {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "assess" => ActionKind::Assess,
+            "rebase" => ActionKind::Rebase,
+            "address_reviews" => ActionKind::AddressReviews,
+            "deslop" => ActionKind::Deslop,
+            "add_tests" => ActionKind::AddTests,
+            "deep_review" => ActionKind::DeepReview,
+            "split" => ActionKind::Split,
+            "changelog_entry" => ActionKind::ChangelogEntry,
+            "custom" => ActionKind::Custom,
+            other => anyhow::bail!("unknown action kind: {other}"),
+        })
+    }
+}
+
+/// Collector sync kind. Stored as snake_case in `sync_log.kind` and accepted
+/// by `/api/sync/:kind` in that form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncKind {
+    All,
+    Repos,
+    Prs,
+    Issues,
+    Crates,
+    Releases,
+    Snapshots,
+}
+
+impl SyncKind {
+    pub const ALL: &'static [SyncKind] = &[
+        SyncKind::All,
+        SyncKind::Repos,
+        SyncKind::Prs,
+        SyncKind::Issues,
+        SyncKind::Crates,
+        SyncKind::Releases,
+        SyncKind::Snapshots,
+    ];
+    /// Whether this kind is offered as a button on the settings page (issues
+    /// sync runs as part of prs).
+    pub fn is_button(&self) -> bool {
+        !matches!(self, SyncKind::Issues)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncKind::All => "all",
+            SyncKind::Repos => "repos",
+            SyncKind::Prs => "prs",
+            SyncKind::Issues => "issues",
+            SyncKind::Crates => "crates",
+            SyncKind::Releases => "releases",
+            SyncKind::Snapshots => "snapshots",
+        }
+    }
+}
+
+impl std::fmt::Display for SyncKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SyncKind {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "all" => SyncKind::All,
+            "repos" => SyncKind::Repos,
+            "prs" => SyncKind::Prs,
+            "issues" => SyncKind::Issues,
+            "crates" => SyncKind::Crates,
+            "releases" => SyncKind::Releases,
+            "snapshots" => SyncKind::Snapshots,
+            other => anyhow::bail!("unknown sync kind '{other}'"),
+        })
+    }
+}
+
+/// Release-target kinds. Stored as `kind` TEXT (`pr`/`issue`/`note`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    Pr,
+    Issue,
+    Note,
+}
+
+impl TargetKind {
+    pub const ALL: &'static [TargetKind] = &[TargetKind::Pr, TargetKind::Issue, TargetKind::Note];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TargetKind::Pr => "pr",
+            TargetKind::Issue => "issue",
+            TargetKind::Note => "note",
+        }
+    }
+}
+
+impl std::fmt::Display for TargetKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for TargetKind {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "pr" => TargetKind::Pr,
+            "issue" => TargetKind::Issue,
+            "note" => TargetKind::Note,
+            other => anyhow::bail!("bad kind '{other}'"),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct DevinStatus {
     pub configured: bool,
@@ -443,6 +640,19 @@ mod tests {
             changelog_group(&pr("feat: api", &["breaking"], "a", "NONE")),
             "Breaking"
         );
+    }
+
+    #[test]
+    fn kind_strings_roundtrip() {
+        for k in ActionKind::ALL {
+            assert_eq!(&k.to_string().parse::<ActionKind>().unwrap(), k);
+        }
+        for k in SyncKind::ALL {
+            assert_eq!(&k.to_string().parse::<SyncKind>().unwrap(), k);
+        }
+        for k in TargetKind::ALL {
+            assert_eq!(&k.to_string().parse::<TargetKind>().unwrap(), k);
+        }
     }
 
     #[test]

@@ -343,7 +343,7 @@ fn ReleaseDetailBody(repo: String) -> Element {
                         on_value_change: move |v: Option<String>| {
                             form_kind.set(v.unwrap_or_else(|| "pr".into()))
                         },
-                        for (i, k) in ["pr", "issue", "note"].iter().enumerate() {
+                        for (i, k) in TargetKind::ALL.iter().enumerate() {
                             SelectOption::<String> {
                                 key: "{k}",
                                 value: k.to_string(),

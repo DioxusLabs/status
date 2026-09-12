@@ -4,6 +4,8 @@ use dioxus::prelude::*;
 
 use crate::api;
 
+use crate::model::SyncKind;
+
 use super::layout::AdminState;
 
 #[component]
@@ -191,11 +193,11 @@ pub fn Settings() -> Element {
                 div { class: "card",
                     h3 { "Sync" }
                     div { class: "chips",
-                        for kind in ["all", "repos", "prs", "crates", "releases", "snapshots"] {
+                        for kind in SyncKind::ALL.iter().filter(|k| k.is_button()) {
                             button {
                                 class: "chip",
                                 onclick: move |_| {
-                                    let kind = kind.to_string();
+                                    let kind = kind.as_str().to_string();
                                     spawn(async move {
                                         match api::sync_now(kind).await {
                                             Ok(m) => notice.set(Some(m)),

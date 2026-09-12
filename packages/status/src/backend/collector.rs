@@ -3,6 +3,8 @@ use std::sync::{Arc, OnceLock};
 
 use tracing::{info, warn};
 
+use crate::model::SyncKind;
+
 use super::{actions, crates_io, db, devin, env, github};
 
 static GUARDS: OnceLock<
@@ -24,33 +26,35 @@ fn now() -> String {
 }
 
 pub async fn run_sync(kind: &str) -> anyhow::Result<String> {
-    let guard = guard_for(kind);
+    let kind: SyncKind = kind.parse()?;
+    let kind_str = kind.as_str();
+    let guard = guard_for(kind_str);
     let _lock = guard
         .try_lock()
-        .map_err(|_| anyhow::anyhow!("a '{kind}' sync is already running"))?;
+        .map_err(|_| anyhow::anyhow!("a '{kind_str}' sync is already running"))?;
     let started = now();
     let result = run_inner(kind).await;
     match &result {
-        Ok(msg) => db::log_sync(kind, "", &started, true, msg).await?,
-        Err(e) => db::log_sync(kind, "", &started, false, &format!("{e:#}")).await?,
+        Ok(msg) => db::log_sync(kind_str, "", &started, true, msg).await?,
+        Err(e) => db::log_sync(kind_str, "", &started, false, &format!("{e:#}")).await?,
     }
     result
 }
 
-async fn run_inner(kind: &str) -> anyhow::Result<String> {
+async fn run_inner(kind: SyncKind) -> anyhow::Result<String> {
     match kind {
-        "repos" => sync_repos().await,
-        "prs" | "issues" => sync_prs_issues().await,
-        "crates" => {
+        SyncKind::Repos => sync_repos().await,
+        SyncKind::Prs | SyncKind::Issues => sync_prs_issues().await,
+        SyncKind::Crates => {
             let n = crates_io::sync_crates().await?;
             Ok(format!("{n} crates synced"))
         }
-        "releases" => sync_releases().await,
-        "snapshots" => {
+        SyncKind::Releases => sync_releases().await,
+        SyncKind::Snapshots => {
             take_snapshots().await?;
             Ok("snapshots written".into())
         }
-        "all" => {
+        SyncKind::All => {
             let r = sync_repos().await;
             let p = sync_prs_issues().await;
             let c = crates_io::sync_crates().await;
@@ -69,7 +73,6 @@ async fn run_inner(kind: &str) -> anyhow::Result<String> {
             }
             Ok(msgs.join("; "))
         }
-        other => Err(anyhow::anyhow!("unknown sync kind '{other}'")),
     }
 }
 

@@ -1,21 +1,9 @@
 use anyhow::{anyhow, Context};
 use serde_json::{json, Value};
 
-use crate::model::{AssessmentView, DevinSessionRow, PrDetail};
+use crate::model::{ActionKind, AssessmentView, DevinSessionRow, PrDetail};
 
 use super::{db, devin};
-
-pub const KINDS: &[&str] = &[
-    "assess",
-    "rebase",
-    "address_reviews",
-    "deslop",
-    "add_tests",
-    "deep_review",
-    "split",
-    "changelog_entry",
-    "custom",
-];
 
 /// Rules baked into every prompt.
 const RULES: &str = r#"You are working in the DioxusLabs/{repo} repository.
@@ -78,19 +66,20 @@ const CHANGELOG_BODY: &str = r#"Write a changelog entry for this PR matching the
 and the PR's labels. If the repo has a changelog file or release-notes
 convention, follow it; otherwise provide the entry text in your summary."#;
 
-fn body_for(kind: &str) -> anyhow::Result<&'static str> {
-    Ok(match kind {
-        "assess" => ASSESS_BODY,
-        "rebase" => REBASE_BODY,
-        "address_reviews" => ADDRESS_REVIEWS_BODY,
-        "deslop" => DESLOP_BODY,
-        "add_tests" => ADD_TESTS_BODY,
-        "deep_review" => DEEP_REVIEW_BODY,
-        "split" => SPLIT_BODY,
-        "changelog_entry" => CHANGELOG_BODY,
-        "custom" => "",
-        other => return Err(anyhow!("unknown action kind: {other}")),
-    })
+impl ActionKind {
+    fn body(&self) -> &'static str {
+        match self {
+            ActionKind::Assess => ASSESS_BODY,
+            ActionKind::Rebase => REBASE_BODY,
+            ActionKind::AddressReviews => ADDRESS_REVIEWS_BODY,
+            ActionKind::Deslop => DESLOP_BODY,
+            ActionKind::AddTests => ADD_TESTS_BODY,
+            ActionKind::DeepReview => DEEP_REVIEW_BODY,
+            ActionKind::Split => SPLIT_BODY,
+            ActionKind::ChangelogEntry => CHANGELOG_BODY,
+            ActionKind::Custom => "",
+        }
+    }
 }
 
 fn render(template: &str, vars: &[(&str, String)]) -> String {
@@ -102,14 +91,18 @@ fn render(template: &str, vars: &[(&str, String)]) -> String {
 }
 
 /// Build the full prompt for `kind` on this PR.
-pub fn build_prompt(kind: &str, pr: &PrDetail, custom: Option<&str>) -> anyhow::Result<String> {
-    let body_kind = if kind == "custom" {
+pub fn build_prompt(
+    kind: ActionKind,
+    pr: &PrDetail,
+    custom: Option<&str>,
+) -> anyhow::Result<String> {
+    let body_kind = if kind.needs_prompt() {
         custom
             .filter(|c| !c.trim().is_empty())
             .ok_or_else(|| anyhow!("custom action needs a prompt"))?
             .to_string()
     } else {
-        body_for(kind)?.to_string()
+        kind.body().to_string()
     };
     let p = &pr.pr;
     let files = if pr.files.is_empty() {
@@ -156,18 +149,15 @@ pub fn assess_schema() -> Value {
 pub async fn dispatch(
     repo: &str,
     number: i64,
-    kind: &str,
+    kind: ActionKind,
     custom: Option<&str>,
 ) -> anyhow::Result<DevinSessionRow> {
-    if !KINDS.contains(&kind) {
-        return Err(anyhow!("unknown action kind: {kind}"));
-    }
     let pr = db::get_pr(repo, number)
         .await?
         .with_context(|| format!("PR {repo}#{number} not in database"))?;
     let prompt = build_prompt(kind, &pr, custom)?;
     db::budget_check_now().await?;
-    let is_assess = kind == "assess";
+    let is_assess = kind == ActionKind::Assess;
     let tags = vec![
         "status-dashboard".to_string(),
         kind.to_string(),
@@ -186,7 +176,7 @@ pub async fn dispatch(
     let id = db::insert_devin_session(&db::NewDevinSession {
         session_id: &created.session_id,
         url: &created.url,
-        kind,
+        kind: kind.as_str(),
         repo,
         number,
         head_sha: &pr.head_sha,
@@ -215,7 +205,7 @@ pub async fn dispatch_assess(
             return Ok(a);
         }
     }
-    let session = dispatch(repo, number, "assess", None).await?;
+    let session = dispatch(repo, number, ActionKind::Assess, None).await?;
     Ok(AssessmentView {
         repo: repo.to_string(),
         number,
@@ -245,7 +235,7 @@ pub async fn poll_session(row: &DevinSessionRow) -> anyhow::Result<()> {
         None,
     )
     .await?;
-    if row.kind == "assess" {
+    if row.kind == ActionKind::Assess.as_str() {
         if let Some(out) = info.structured_output {
             db::upsert_assessment(&row.repo, row.number, &row.head_sha, &row.session_id, &out)
                 .await?;
@@ -277,7 +267,7 @@ mod tests {
 
     #[test]
     fn assess_prompt_has_context() {
-        let p = build_prompt("assess", &detail(), None).unwrap();
+        let p = build_prompt(ActionKind::Assess, &detail(), None).unwrap();
         assert!(p.contains("DioxusLabs/dioxus"));
         assert!(p.contains("#42"));
         assert!(p.contains("https://github.com/DioxusLabs/dioxus/pull/42"));
@@ -285,7 +275,7 @@ mod tests {
 
     #[test]
     fn deslop_prompt_mentions_skill() {
-        let p = build_prompt("deslop", &detail(), None).unwrap();
+        let p = build_prompt(ActionKind::Deslop, &detail(), None).unwrap();
         assert!(p.contains("deslop-rust-skill"));
         assert!(p.contains("devin/pr-42-deslop"));
         assert!(p.contains("dioxus"));
@@ -293,8 +283,8 @@ mod tests {
 
     #[test]
     fn unknown_kind_fails() {
-        assert!(build_prompt("nope", &detail(), None).is_err());
-        assert!(build_prompt("custom", &detail(), None).is_err());
-        assert!(build_prompt("custom", &detail(), Some("do x")).is_ok());
+        assert!("nope".parse::<ActionKind>().is_err());
+        assert!(build_prompt(ActionKind::Custom, &detail(), None).is_err());
+        assert!(build_prompt(ActionKind::Custom, &detail(), Some("do x")).is_ok());
     }
 }

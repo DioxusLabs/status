@@ -9,26 +9,26 @@ use crate::components::dropdown_menu::{DropdownMenu, DropdownMenuContent, Dropdo
 use serde::{Deserialize, Serialize};
 
 /// Explicit selection model for the repo filter. `All` means the unified
-/// cross-repo view (sent to the server as `None`); `Some(vec![])` means
+/// cross-repo view (sent to the server as `None`); `Only(vec![])` means
 /// nothing selected.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 enum RepoFilter {
     All,
-    Some(Vec<String>),
+    Only(Vec<String>),
 }
 
 impl RepoFilter {
     fn to_api(&self) -> Option<Vec<String>> {
         match self {
             RepoFilter::All => None,
-            RepoFilter::Some(repos) => Some(repos.clone()),
+            RepoFilter::Only(repos) => Some(repos.clone()),
         }
     }
 
     fn label(&self) -> String {
         match self {
             RepoFilter::All => "All repos".into(),
-            RepoFilter::Some(repos) => match repos.len() {
+            RepoFilter::Only(repos) => match repos.len() {
                 0 => "No repos".into(),
                 1 => repos[0]
                     .strip_prefix("DioxusLabs/")
@@ -123,7 +123,7 @@ pub fn Overview() -> Element {
                             Button {
                                 variant: ButtonVariant::Ghost,
                                 size: ButtonSize::Xs,
-                                onclick: move |_| selected.set(RepoFilter::Some(Vec::new())),
+                                onclick: move |_| selected.set(RepoFilter::Only(Vec::new())),
                                 "deselect all"
                             }
                         }
@@ -176,7 +176,7 @@ fn OverviewRepoItem(
     let state_name = name.clone();
     let checked = use_memo(move || match selected() {
         RepoFilter::All => true,
-        RepoFilter::Some(repos) => repos.iter().any(|repo| repo == &state_name),
+        RepoFilter::Only(repos) => repos.iter().any(|repo| repo == &state_name),
     });
     let label = name
         .strip_prefix("DioxusLabs/")
@@ -185,7 +185,7 @@ fn OverviewRepoItem(
     let toggle = EventHandler::new(move |on: bool| {
         let mut repos = match selected() {
             RepoFilter::All => monitored.clone(),
-            RepoFilter::Some(repos) => repos,
+            RepoFilter::Only(repos) => repos,
         };
         if on {
             if !repos.iter().any(|repo| repo == &name) {
@@ -197,7 +197,7 @@ fn OverviewRepoItem(
         selected.set(if monitored.iter().all(|m| repos.contains(m)) {
             RepoFilter::All
         } else {
-            RepoFilter::Some(repos)
+            RepoFilter::Only(repos)
         });
     });
     rsx! {
