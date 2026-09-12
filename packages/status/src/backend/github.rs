@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -8,24 +7,75 @@ use serde_json::{json, Value};
 use super::db::{self, DbIssue, DbPr};
 use super::scoring::{self, ScoreInput};
 
-static CLIENT: OnceLock<octocrab::Octocrab> = OnceLock::new();
+static CLIENT: tokio::sync::OnceCell<octocrab::Octocrab> = tokio::sync::OnceCell::const_new();
 
-pub fn client() -> anyhow::Result<&'static octocrab::Octocrab> {
-    if let Some(c) = CLIENT.get() {
-        return Ok(c);
+/// Octocrab client. Prefers GitHub App auth (GITHUB_APP_ID + private key +
+/// installation for the org); octocrab mints the RS256 JWT and refreshes the
+/// installation token itself. Falls back to GITHUB_TOKEN when the app is not
+/// configured or not installed.
+pub async fn client() -> anyhow::Result<&'static octocrab::Octocrab> {
+    CLIENT
+        .get_or_try_init(|| async { build_client().await })
+        .await
+}
+
+async fn build_client() -> anyhow::Result<octocrab::Octocrab> {
+    if let (Some(app_id), Some(pem)) = (
+        super::env::github_app_id(),
+        super::env::github_app_private_key(),
+    ) {
+        match app_client(app_id, &pem).await {
+            Ok(c) => {
+                tracing::info!("github auth: app installation token (app {app_id})");
+                return Ok(c);
+            }
+            Err(e) => {
+                tracing::warn!("github app auth unavailable, using GITHUB_TOKEN: {e:#}");
+            }
+        }
     }
+    tracing::info!("github auth: personal access token");
     let token = super::env::github_token().context("GITHUB_TOKEN not set")?;
-    let client = octocrab::Octocrab::builder()
+    octocrab::Octocrab::builder()
         .personal_token(token)
         .build()
-        .context("build octocrab client")?;
-    Ok(CLIENT.get_or_init(|| client))
+        .context("build octocrab client")
+}
+
+async fn app_client(app_id: u64, pem: &[u8]) -> anyhow::Result<octocrab::Octocrab> {
+    let key =
+        jsonwebtoken::EncodingKey::from_rsa_pem(pem).context("parse GITHUB_APP private key")?;
+    let app = octocrab::Octocrab::builder()
+        .app(octocrab::models::AppId::from(app_id), key)
+        .build()
+        .context("build app client")?;
+    let installation_id = match super::env::github_app_installation_id() {
+        Some(id) => id,
+        None => {
+            let org = super::env::org();
+            let installs = app
+                .apps()
+                .installations()
+                .send()
+                .await
+                .context("GET /app/installations")?
+                .items;
+            installs
+                .iter()
+                .find(|i| i.account.login == org)
+                .map(|i| i.id.0)
+                .with_context(|| format!("app not installed on org {org}"))
+                .inspect_err(|e| tracing::warn!("{e:#}"))?
+        }
+    };
+    app.installation(installation_id.into())
+        .context("installation client")
 }
 
 async fn graphql(query: &str, vars: Value) -> anyhow::Result<Value> {
     let body = json!({ "query": query, "variables": vars });
     for attempt in 0..4 {
-        match client()?.graphql::<Value>(&body).await {
+        match client().await?.graphql::<Value>(&body).await {
             Ok(resp) => {
                 if let Some(errors) = resp.get("errors") {
                     let msg = errors.to_string();
@@ -419,6 +469,7 @@ query($org: String!, $repo: String!, $cursor: String) {
         additions
         deletions
         changedFiles
+        labels(first: 20) { nodes { name color } }
       }
     }
   }
@@ -448,6 +499,13 @@ pub async fn sync_closed_prs(repo: &str) -> anyhow::Result<usize> {
                 break 'pages;
             }
             let state = n["state"].as_str().unwrap_or("").to_lowercase();
+            let labels: Vec<String> = n["labels"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|l| l["name"].as_str().map(String::from))
+                .collect();
             let pr = DbPr {
                 id: n["databaseId"].as_i64().unwrap_or(0),
                 repo: repo.to_string(),
@@ -471,7 +529,7 @@ pub async fn sync_closed_prs(repo: &str) -> anyhow::Result<usize> {
                 mergeable: None,
                 review_decision: None,
                 ci_state: "none".into(),
-                labels_json: "[]".into(),
+                labels_json: serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into()),
                 reviewers_json: "[]".into(),
                 unresolved_threads: 0,
                 comments: 0,
@@ -483,7 +541,7 @@ pub async fn sync_closed_prs(repo: &str) -> anyhow::Result<usize> {
                 score_breakdown_json: "[]".into(),
                 synced_at: Some(chrono::Utc::now().to_rfc3339()),
             };
-            db::upsert_pr(&pr).await?;
+            db::update_pr_lifecycle(&pr).await?;
             count += 1;
         }
         if page["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
@@ -512,6 +570,7 @@ query($org: String!, $repo: String!, $cursor: String) {
         createdAt
         updatedAt
         closedAt
+        labels(first: 20) { nodes { name color } }
         comments { totalCount }
         reactions { totalCount }
       }
@@ -538,7 +597,14 @@ pub async fn sync_closed_issues(repo: &str) -> anyhow::Result<usize> {
             if updated.is_some_and(|t| t.with_timezone(&chrono::Utc) < cutoff) {
                 break 'pages;
             }
-            db::upsert_issue(&DbIssue {
+            let labels: Vec<String> = n["labels"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|l| l["name"].as_str().map(String::from))
+                .collect();
+            db::update_issue_lifecycle(&DbIssue {
                 id: n["databaseId"].as_i64().unwrap_or(0),
                 repo: repo.to_string(),
                 number: n["number"].as_i64().unwrap_or(0),
@@ -551,7 +617,7 @@ pub async fn sync_closed_issues(repo: &str) -> anyhow::Result<usize> {
                 created_at: n["createdAt"].as_str().map(String::from),
                 updated_at: n["updatedAt"].as_str().map(String::from),
                 closed_at: n["closedAt"].as_str().map(String::from),
-                labels_json: "[]".into(),
+                labels_json: serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into()),
                 comments: n["comments"]["totalCount"].as_i64().unwrap_or(0),
                 reactions: n["reactions"]["totalCount"].as_i64().unwrap_or(0),
                 assignees_json: "[]".into(),
@@ -602,6 +668,7 @@ query($org: String!, $repo: String!, $cursor: String) {
 pub async fn sync_open_issues(repo: &str, members: &HashSet<String>) -> anyhow::Result<usize> {
     let org = super::env::org();
     let mut cursor: Option<String> = None;
+    let mut seen: HashSet<i64> = HashSet::new();
     let mut count = 0;
     loop {
         let data = graphql(
@@ -611,6 +678,7 @@ pub async fn sync_open_issues(repo: &str, members: &HashSet<String>) -> anyhow::
         .await?;
         let page = &data["repository"]["issues"];
         for n in page["nodes"].as_array().cloned().unwrap_or_default() {
+            seen.insert(n["number"].as_i64().unwrap_or(0));
             let login = n["author"]["login"].as_str().unwrap_or("");
             let labels: Vec<String> = n["labels"]["nodes"]
                 .as_array()
@@ -676,6 +744,11 @@ pub async fn sync_open_issues(repo: &str, members: &HashSet<String>) -> anyhow::
             break;
         }
     }
+    for number in db::open_issue_numbers(repo).await? {
+        if !seen.contains(&number) {
+            db::mark_issue_state(repo, number, "closed").await?;
+        }
+    }
     Ok(count)
 }
 
@@ -698,7 +771,8 @@ struct GhAsset {
 
 pub async fn sync_releases(repo: &str) -> anyhow::Result<usize> {
     let org = super::env::org();
-    let releases: Vec<GhRelease> = client()?
+    let releases: Vec<GhRelease> = client()
+        .await?
         .get(
             format!("/repos/{org}/{repo}/releases?per_page=30"),
             None::<&()>,
@@ -732,4 +806,24 @@ pub async fn sync_releases(repo: &str) -> anyhow::Result<usize> {
         count += 1;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    #[ignore = "requires GITHUB_APP_PRIVATE_KEY_PATH + network"]
+    async fn app_jwt_gets_app_slug() {
+        dotenvy::from_filename("../../.env").ok();
+        let pem = super::super::env::github_app_private_key().expect("no pem");
+        let key = jsonwebtoken::EncodingKey::from_rsa_pem(&pem).unwrap();
+        let app = octocrab::Octocrab::builder()
+            .app(
+                octocrab::models::AppId::from(super::super::env::github_app_id().unwrap()),
+                key,
+            )
+            .build()
+            .unwrap();
+        let v: serde_json::Value = app.get("/app", None::<&()>).await.unwrap();
+        assert!(v["slug"].is_string(), "{v}");
+    }
 }
