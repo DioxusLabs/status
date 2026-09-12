@@ -343,3 +343,19 @@ textarea.crates {
 .card.assessment { margin: 8px 0; }
 .card.assessment ul { margin: 4px 0; padding-left: 20px; }
 .card.assessment li { font-size: 13px; }
+
+/* releases */
+.rel-meta { margin: 4px 0; font-size: 13px; color: var(--text-muted); }
+.rel-meta .mono { color: var(--text); }
+.warn-text { color: var(--warn); }
+.progress {
+    height: 6px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+.progress-fill { height: 100%; background: var(--accent); }
+.target-row { display: flex; gap: 8px; align-items: center; }
+.page h4 { margin: 14px 0 4px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }

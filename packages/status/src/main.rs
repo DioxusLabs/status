@@ -8,7 +8,8 @@ mod backend;
 
 use dioxus::prelude::*;
 use ui::{
-    Bots, Health, Issues, Layout, Overview, PullRequests, Releases, RepoDetail, Repos, Settings,
+    Bots, Health, Issues, Layout, Overview, PullRequests, ReleaseDetailPage, Releases, RepoDetail,
+    Repos, Settings,
 };
 
 #[derive(Routable, Clone, PartialEq)]
@@ -26,6 +27,8 @@ enum Route {
     RepoDetail { name: String },
     #[route("/releases")]
     Releases {},
+    #[route("/releases/:repo")]
+    ReleaseDetailPage { repo: String },
     #[route("/health")]
     Health {},
     #[route("/bots")]
