@@ -166,9 +166,9 @@ a:hover { text-decoration: underline; }
 .fail-text { color: var(--fail); }
 
 .filter-bar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
-.filter-bar input,
-.filter-bar select,
-.filter-bar button,
+.filter-bar > input,
+.filter-bar > select,
+.filter-bar > button,
 .filter-bar .dx-input,
 .filter-bar .dx-button,
 .filter-bar .dx-select-trigger,
@@ -179,7 +179,7 @@ a:hover { text-decoration: underline; }
     font: inherit;
     font-size: 13px;
 }
-.filter-bar input {
+.filter-bar > input {
     flex: 1;
     font-family: var(--mono);
     font-size: 12px;
@@ -190,8 +190,10 @@ a:hover { text-decoration: underline; }
     font-size: 12px;
 }
 .filter-bar h1 { margin: 0; font-size: 20px; margin-right: auto; }
-.filter-bar button { cursor: pointer; color: var(--text-muted); }
-.filter-bar button:hover { color: var(--text); border-color: var(--accent); }
+.filter-bar > button,
+.filter-bar .dx-dropdown-menu-trigger { cursor: pointer; color: var(--text-muted); }
+.filter-bar > button:hover,
+.filter-bar .dx-dropdown-menu-trigger:hover { color: var(--text); border-color: var(--accent); }
 
 .search {
     font-family: var(--mono);
@@ -212,6 +214,7 @@ a:hover { text-decoration: underline; }
     white-space: nowrap;
 }
 .colrow:hover { background: var(--bg); }
+.colrow .dx-checkbox[data-state="checked"] { background: var(--accent); color: var(--bg); }
 .filter-bar .columns-menu { right: 0; left: auto; }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
