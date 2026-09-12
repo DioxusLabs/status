@@ -808,6 +808,143 @@ pub async fn sync_releases(repo: &str) -> anyhow::Result<usize> {
     Ok(count)
 }
 
+const MERGED_PRS_SEARCH_QUERY: &str = r#"
+query($q: String!, $cursor: String) {
+  rateLimit { remaining }
+  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {
+        databaseId
+        number
+        title
+        url
+        state
+        isDraft
+        author { login }
+        authorAssociation
+        createdAt
+        updatedAt
+        mergedAt
+        closedAt
+        additions
+        deletions
+        changedFiles
+        labels(first: 20) { nodes { name } }
+      }
+    }
+  }
+}"#;
+
+/// Backfill merged PRs since `since` (YYYY-MM-DD or RFC3339) via GraphQL
+/// search — needed for per-release changelogs, since the direct
+/// `pullRequests` connection can only order by created/updated time.
+/// Capped at 300 PRs.
+pub async fn sync_merged_since(repo: &str, since: &str) -> anyhow::Result<usize> {
+    let org = super::env::org();
+    let q = format!("repo:{org}/{repo} type:pr is:merged merged:>={since}");
+    let mut cursor: Option<String> = None;
+    let mut count = 0;
+    'pages: loop {
+        let data = graphql(MERGED_PRS_SEARCH_QUERY, json!({ "q": q, "cursor": cursor })).await?;
+        let page = &data["search"];
+        for n in page["nodes"].as_array().cloned().unwrap_or_default() {
+            if count >= 300 {
+                break 'pages;
+            }
+            let labels: Vec<String> = n["labels"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|l| l["name"].as_str().map(String::from))
+                .collect();
+            let pr = DbPr {
+                id: n["databaseId"].as_i64().unwrap_or(0),
+                repo: repo.to_string(),
+                number: n["number"].as_i64().unwrap_or(0),
+                title: n["title"].as_str().map(String::from),
+                body: None,
+                author: n["author"]["login"].as_str().map(String::from),
+                author_association: n["authorAssociation"].as_str().map(String::from),
+                url: n["url"].as_str().map(String::from),
+                state: Some(n["state"].as_str().unwrap_or("merged").to_lowercase()),
+                is_draft: n["isDraft"].as_bool().unwrap_or(false),
+                created_at: n["createdAt"].as_str().map(String::from),
+                updated_at: n["updatedAt"].as_str().map(String::from),
+                merged_at: n["mergedAt"].as_str().map(String::from),
+                closed_at: n["closedAt"].as_str().map(String::from),
+                head_sha: None,
+                base_ref: None,
+                additions: n["additions"].as_i64().unwrap_or(0),
+                deletions: n["deletions"].as_i64().unwrap_or(0),
+                changed_files: n["changedFiles"].as_i64().unwrap_or(0),
+                mergeable: None,
+                review_decision: None,
+                ci_state: "none".into(),
+                labels_json: serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into()),
+                reviewers_json: "[]".into(),
+                unresolved_threads: 0,
+                comments: 0,
+                last_activity_at: n["updatedAt"].as_str().map(String::from),
+                last_activity_by: None,
+                linked_issues_json: "[]".into(),
+                files_json: "[]".into(),
+                score: 0,
+                score_breakdown_json: "[]".into(),
+                synced_at: Some(chrono::Utc::now().to_rfc3339()),
+            };
+            db::update_pr_lifecycle(&pr).await?;
+            count += 1;
+        }
+        if page["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
+            cursor = page["pageInfo"]["endCursor"].as_str().map(String::from);
+        } else {
+            break;
+        }
+    }
+    Ok(count)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GhMilestone {
+    number: i64,
+    title: String,
+    description: Option<String>,
+    due_on: Option<String>,
+    state: String,
+    open_issues: i64,
+    closed_issues: i64,
+    html_url: String,
+}
+
+pub async fn sync_milestones(repo: &str) -> anyhow::Result<usize> {
+    let org = super::env::org();
+    let milestones: Vec<GhMilestone> = client()
+        .await?
+        .get(
+            format!("/repos/{org}/{repo}/milestones?state=open&per_page=50"),
+            None::<&()>,
+        )
+        .await?;
+    let n = milestones.len();
+    for m in milestones {
+        db::upsert_milestone(
+            repo,
+            m.number,
+            &m.title,
+            m.description.as_deref(),
+            m.due_on.as_deref(),
+            &m.state,
+            m.open_issues,
+            m.closed_issues,
+            &m.html_url,
+        )
+        .await?;
+    }
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     #[tokio::test]

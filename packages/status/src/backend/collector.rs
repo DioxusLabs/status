@@ -138,6 +138,38 @@ async fn sync_releases() -> anyhow::Result<String> {
             Ok(n) => total += n,
             Err(e) => warn!("sync releases {repo}: {e:#}"),
         }
+        match github::sync_milestones(repo).await {
+            Ok(n) if n > 0 => {
+                db::log_sync("milestones", repo, &now(), true, &format!("{n} milestones")).await?
+            }
+            Ok(_) => {}
+            Err(e) => warn!("sync milestones {repo}: {e:#}"),
+        }
+        // Backfill merged PRs since the last stable release for changelogs.
+        let since = match db::latest_stable_release(repo).await {
+            Ok(Some((_, at))) => at,
+            Ok(None) => (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339(),
+            Err(e) => {
+                warn!("latest release {repo}: {e:#}");
+                continue;
+            }
+        };
+        match github::sync_merged_since(repo, &since).await {
+            Ok(n) => {
+                total += n;
+                if n > 0 {
+                    db::log_sync(
+                        "releases",
+                        repo,
+                        &now(),
+                        true,
+                        &format!("{n} merged prs since {since}"),
+                    )
+                    .await?;
+                }
+            }
+            Err(e) => warn!("merged backfill {repo}: {e:#}"),
+        }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
     Ok(format!("{total} releases"))

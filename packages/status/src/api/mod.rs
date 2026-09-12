@@ -596,3 +596,112 @@ pub async fn get_devin_status() -> Result<DevinStatus> {
         api_base: env::devin_api_base(),
     })
 }
+
+#[cfg(feature = "server")]
+async fn release_overview_row(repo: &str) -> anyhow::Result<ReleaseOverviewRow> {
+    let releases = db::list_releases(repo, 6).await?;
+    let stable = db::stable_release_dates(repo, 6).await?;
+    let latest_stable = releases.iter().find(|r| !r.is_prerelease);
+    let prerelease_tag = releases
+        .first()
+        .filter(|r| r.is_prerelease)
+        .map(|r| r.tag.clone());
+    let days_since = latest_stable
+        .and_then(|r| r.published_at.as_deref())
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
+        .unwrap_or(0);
+    let since = latest_stable
+        .and_then(|r| r.published_at.clone())
+        .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339());
+    let targets = db::list_release_targets(Some(repo)).await?;
+    Ok(ReleaseOverviewRow {
+        repo: repo.to_string(),
+        latest_tag: latest_stable.map(|r| r.tag.clone()).unwrap_or_default(),
+        latest_at: latest_stable.and_then(|r| r.published_at.clone()),
+        days_since,
+        prerelease_tag,
+        unreleased_merged: db::merged_count_since(repo, &since).await?,
+        cadence_days: cadence_days(&stable),
+        next_milestone: db::list_milestones(Some(repo)).await?.into_iter().next(),
+        must_ship_open: targets.iter().filter(|t| !t.done).count() as i64,
+        must_ship_total: targets.len() as i64,
+    })
+}
+
+#[get("/api/releases/overview")]
+pub async fn get_releases_overview() -> Result<Vec<ReleaseOverviewRow>> {
+    let mut rows = Vec::new();
+    for repo in db::monitored_repos().await? {
+        rows.push(release_overview_row(&repo).await?);
+    }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.days_since));
+    Ok(rows)
+}
+
+#[post("/api/releases/detail")]
+pub async fn get_release_detail(repo: String) -> Result<ReleaseDetail> {
+    let releases = db::list_releases(&repo, 10).await?;
+    let since = db::latest_stable_release(&repo)
+        .await?
+        .map(|(_, at)| at)
+        .or_else(|| Some((chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339()));
+    let mut groups: std::collections::BTreeMap<&'static str, Vec<PrRow>> =
+        std::collections::BTreeMap::new();
+    if let Some(s) = &since {
+        for p in db::merged_prs_since(&repo, s).await? {
+            groups
+                .entry(changelog_group(&p.into_row()))
+                .or_default()
+                .push(p.into_row());
+        }
+    }
+    let unreleased: Vec<ChangelogGroup> = CHANGELOG_GROUP_ORDER
+        .iter()
+        .filter_map(|label| {
+            groups.get(label).map(|prs| ChangelogGroup {
+                label: label.to_string(),
+                prs: prs.clone(),
+            })
+        })
+        .collect();
+    Ok(ReleaseDetail {
+        repo: repo.clone(),
+        releases,
+        unreleased,
+        milestones: db::list_milestones(Some(&repo)).await?,
+        targets: db::list_release_targets(Some(&repo)).await?,
+        since,
+    })
+}
+
+#[post("/api/release_targets/add")]
+pub async fn add_release_target(
+    repo: String,
+    version: String,
+    kind: String,
+    number: Option<i64>,
+    title: String,
+) -> Result<()> {
+    auth::require_admin()?;
+    if !matches!(kind.as_str(), "pr" | "issue" | "note") {
+        return Err(ServerFnError::new(format!("bad kind '{kind}'")).into());
+    }
+    db::add_release_target(&repo, &version, &kind, number, title)
+        .await
+        .map_err(Into::into)
+}
+
+#[post("/api/release_targets/remove")]
+pub async fn remove_release_target(id: i64) -> Result<()> {
+    auth::require_admin()?;
+    db::remove_release_target(id).await.map_err(Into::into)
+}
+
+#[post("/api/release_targets/done")]
+pub async fn set_release_target_done(id: i64, done: bool) -> Result<()> {
+    auth::require_admin()?;
+    db::set_release_target_done(id, done)
+        .await
+        .map_err(Into::into)
+}

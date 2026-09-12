@@ -840,6 +840,279 @@ pub async fn budget_consume() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_milestone(
+    repo: &str,
+    number: i64,
+    title: &str,
+    description: Option<&str>,
+    due_on: Option<&str>,
+    state: &str,
+    open_issues: i64,
+    closed_issues: i64,
+    url: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO milestones (repo, number, title, description, due_on, state, open_issues, closed_issues, url, synced_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(repo, number) DO UPDATE SET title=excluded.title,
+            description=excluded.description, due_on=excluded.due_on, state=excluded.state,
+            open_issues=excluded.open_issues, closed_issues=excluded.closed_issues,
+            url=excluded.url, synced_at=excluded.synced_at",
+    )
+    .bind(repo)
+    .bind(number)
+    .bind(title)
+    .bind(description)
+    .bind(due_on)
+    .bind(state)
+    .bind(open_issues)
+    .bind(closed_issues)
+    .bind(url)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+/// Open milestones for a repo (or all repos), nearest due date first.
+pub async fn list_milestones(repo: Option<&str>) -> anyhow::Result<Vec<MilestoneRow>> {
+    let mut sql = String::from(
+        "SELECT repo, number, title, due_on, open_issues, closed_issues, url
+         FROM milestones WHERE state = 'open'",
+    );
+    if repo.is_some() {
+        sql.push_str(" AND repo = ?");
+    }
+    sql.push_str(" ORDER BY due_on IS NULL, due_on, number");
+    let mut q = sqlx::query_as::<
+        _,
+        (
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            i64,
+            i64,
+            Option<String>,
+        ),
+    >(&sql);
+    if let Some(r) = repo {
+        q = q.bind(r);
+    }
+    let rows = q.fetch_all(pool()).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| MilestoneRow {
+            repo: r.0,
+            number: r.1,
+            title: r.2.unwrap_or_default(),
+            due_on: r.3,
+            open_issues: r.4,
+            closed_issues: r.5,
+            url: r.6.unwrap_or_default(),
+        })
+        .collect())
+}
+
+pub async fn list_releases(repo: &str, limit: i64) -> anyhow::Result<Vec<ReleaseRow>> {
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            bool,
+            String,
+        ),
+    >(
+        "SELECT repo, tag, name, published_at, url, is_prerelease, assets_json
+         FROM releases WHERE repo = ? ORDER BY published_at DESC LIMIT ?",
+    )
+    .bind(repo)
+    .bind(limit)
+    .fetch_all(pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ReleaseRow {
+            repo: r.0,
+            tag: r.1,
+            name: r.2.unwrap_or_default(),
+            published_at: r.3,
+            url: r.4,
+            is_prerelease: r.5,
+            assets: serde_json::from_str(&r.6).unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// (tag, published_at) of the latest non-prerelease release.
+pub async fn latest_stable_release(repo: &str) -> anyhow::Result<Option<(String, String)>> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT tag, published_at FROM releases
+         WHERE repo = ? AND is_prerelease = 0 AND published_at IS NOT NULL
+         ORDER BY published_at DESC LIMIT 1",
+    )
+    .bind(repo)
+    .fetch_optional(pool())
+    .await?;
+    Ok(row.and_then(|(t, p)| p.map(|p| (t, p))))
+}
+
+/// published_at of the last `limit` non-prerelease releases, newest first.
+pub async fn stable_release_dates(repo: &str, limit: i64) -> anyhow::Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT published_at FROM releases
+         WHERE repo = ? AND is_prerelease = 0 AND published_at IS NOT NULL
+         ORDER BY published_at DESC LIMIT ?",
+    )
+    .bind(repo)
+    .bind(limit)
+    .fetch_all(pool())
+    .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+pub async fn merged_count_since(repo: &str, since: &str) -> anyhow::Result<i64> {
+    let n = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM pull_requests WHERE repo = ? AND merged_at IS NOT NULL AND merged_at >= ?",
+    )
+    .bind(repo)
+    .bind(since)
+    .fetch_one(pool())
+    .await?;
+    Ok(n)
+}
+
+pub async fn merged_prs_since(repo: &str, since: &str) -> anyhow::Result<Vec<DbPr>> {
+    let rows = sqlx::query_as::<_, DbPr>(
+        "SELECT * FROM pull_requests
+         WHERE repo = ? AND merged_at IS NOT NULL AND merged_at >= ?
+         ORDER BY merged_at DESC",
+    )
+    .bind(repo)
+    .bind(since)
+    .fetch_all(pool())
+    .await?;
+    Ok(rows)
+}
+
+/// Release targets with `done` resolved: manual flag, or computed against our
+/// PR/issue tables (merged PR / closed issue).
+pub async fn list_release_targets(repo: Option<&str>) -> anyhow::Result<Vec<ReleaseTarget>> {
+    let mut sql = String::from(
+        "SELECT t.id, t.repo, t.version, t.kind, t.number, t.title, t.created_at,
+            CASE WHEN t.done = 1 THEN 1
+                 WHEN t.kind = 'pr' AND EXISTS (
+                    SELECT 1 FROM pull_requests p
+                    WHERE p.repo = t.repo AND p.number = t.number AND p.merged_at IS NOT NULL) THEN 1
+                 WHEN t.kind = 'issue' AND EXISTS (
+                    SELECT 1 FROM issues i
+                    WHERE i.repo = t.repo AND i.number = t.number AND i.state = 'closed') THEN 1
+                 ELSE 0 END AS done
+         FROM release_targets t",
+    );
+    if repo.is_some() {
+        sql.push_str(" WHERE t.repo = ?");
+    }
+    sql.push_str(" ORDER BY t.repo, t.version, t.id");
+    let mut q = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            String,
+            Option<i64>,
+            String,
+            String,
+            bool,
+        ),
+    >(&sql);
+    if let Some(r) = repo {
+        q = q.bind(r);
+    }
+    let rows = q.fetch_all(pool()).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ReleaseTarget {
+            id: r.0,
+            repo: r.1,
+            version: r.2,
+            kind: r.3,
+            number: r.4,
+            title: r.5,
+            created_at: r.6,
+            done: r.7,
+        })
+        .collect())
+}
+
+pub async fn add_release_target(
+    repo: &str,
+    version: &str,
+    kind: &str,
+    number: Option<i64>,
+    mut title: String,
+) -> anyhow::Result<()> {
+    if title.is_empty() {
+        if let Some(n) = number {
+            title = match kind {
+                "issue" => sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT title FROM issues WHERE repo = ? AND number = ?",
+                )
+                .bind(repo)
+                .bind(n)
+                .fetch_optional(pool())
+                .await?
+                .flatten(),
+                _ => sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT title FROM pull_requests WHERE repo = ? AND number = ?",
+                )
+                .bind(repo)
+                .bind(n)
+                .fetch_optional(pool())
+                .await?
+                .flatten(),
+            }
+            .unwrap_or_default();
+        }
+    }
+    sqlx::query(
+        "INSERT INTO release_targets (repo, version, kind, number, title, created_at)
+         VALUES (?,?,?,?,?,?)",
+    )
+    .bind(repo)
+    .bind(version)
+    .bind(kind)
+    .bind(number)
+    .bind(&title)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_release_target(id: i64) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM release_targets WHERE id = ?")
+        .bind(id)
+        .execute(pool())
+        .await?;
+    Ok(())
+}
+
+pub async fn set_release_target_done(id: i64, done: bool) -> anyhow::Result<()> {
+    sqlx::query("UPDATE release_targets SET done = ? WHERE id = ?")
+        .bind(done)
+        .bind(id)
+        .execute(pool())
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

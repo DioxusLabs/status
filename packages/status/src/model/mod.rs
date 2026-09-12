@@ -266,9 +266,201 @@ pub struct AssessmentView {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct MilestoneRow {
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub due_on: Option<String>,
+    pub open_issues: i64,
+    pub closed_issues: i64,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ReleaseTarget {
+    pub id: i64,
+    pub repo: String,
+    pub version: String,
+    pub kind: String,
+    pub number: Option<i64>,
+    pub title: String,
+    pub done: bool,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ReleaseOverviewRow {
+    pub repo: String,
+    pub latest_tag: String,
+    pub latest_at: Option<String>,
+    pub days_since: i64,
+    pub prerelease_tag: Option<String>,
+    pub unreleased_merged: i64,
+    pub cadence_days: Option<i64>,
+    pub next_milestone: Option<MilestoneRow>,
+    pub must_ship_open: i64,
+    pub must_ship_total: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChangelogGroup {
+    pub label: String,
+    pub prs: Vec<PrRow>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ReleaseDetail {
+    pub repo: String,
+    pub releases: Vec<ReleaseRow>,
+    pub unreleased: Vec<ChangelogGroup>,
+    pub milestones: Vec<MilestoneRow>,
+    pub targets: Vec<ReleaseTarget>,
+    pub since: Option<String>,
+}
+
+/// Changelog bucket for a merged PR: labels first, then conventional-commit
+/// prefixes on the title, then author kind.
+#[cfg(feature = "server")]
+pub fn changelog_group(p: &PrRow) -> &'static str {
+    let has_label = |needles: &[&str]| {
+        p.labels.iter().any(|l| {
+            let l = l.to_lowercase();
+            needles.iter().any(|n| l.contains(n))
+        })
+    };
+    let title = p.title.to_lowercase();
+    let starts = |pats: &[&str]| pats.iter().any(|x| title.starts_with(x));
+
+    if has_label(&["breaking"]) {
+        "Breaking"
+    } else if starts(&["feat"]) || has_label(&["feature", "enhancement"]) {
+        "Features"
+    } else if starts(&["fix"]) || has_label(&["bug"]) {
+        "Fixes"
+    } else if starts(&["docs"]) || has_label(&["docs", "documentation"]) {
+        "Docs"
+    } else if has_label(&["ci", "chore", "deps", "dependencies"])
+        || p.author.ends_with("[bot]")
+        || p.author_association == "BOT"
+    {
+        "Internal"
+    } else {
+        "Other"
+    }
+}
+
+#[cfg(feature = "server")]
+pub const CHANGELOG_GROUP_ORDER: &[&str] =
+    &["Breaking", "Features", "Fixes", "Docs", "Other", "Internal"];
+
+/// Median gap (days) between consecutive published_at timestamps (any order).
+pub fn cadence_days(dates: &[String]) -> Option<i64> {
+    let mut ts: Vec<i64> = dates
+        .iter()
+        .filter_map(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.timestamp())
+        .collect();
+    ts.sort_unstable();
+    let mut gaps: Vec<i64> = ts
+        .windows(2)
+        .map(|w| (w[1] - w[0]).div_euclid(86_400))
+        .collect();
+    if gaps.is_empty() {
+        return None;
+    }
+    gaps.sort_unstable();
+    Some(gaps[gaps.len() / 2])
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct DevinStatus {
     pub configured: bool,
     pub budget_used: i64,
     pub budget_total: i64,
     pub api_base: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pr(title: &str, labels: &[&str], author: &str, assoc: &str) -> PrRow {
+        PrRow {
+            title: title.into(),
+            labels: labels.iter().map(|s| s.to_string()).collect(),
+            author: author.into(),
+            author_association: assoc.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn changelog_groups() {
+        assert_eq!(
+            changelog_group(&pr("x", &["breaking-change"], "a", "NONE")),
+            "Breaking"
+        );
+        assert_eq!(
+            changelog_group(&pr("feat: thing", &[], "a", "NONE")),
+            "Features"
+        );
+        assert_eq!(
+            changelog_group(&pr("x", &["enhancement"], "a", "NONE")),
+            "Features"
+        );
+        assert_eq!(
+            changelog_group(&pr("fix: crash", &[], "a", "NONE")),
+            "Fixes"
+        );
+        assert_eq!(changelog_group(&pr("x", &["bug"], "a", "NONE")), "Fixes");
+        assert_eq!(
+            changelog_group(&pr("docs: readme", &[], "a", "NONE")),
+            "Docs"
+        );
+        assert_eq!(
+            changelog_group(&pr("x", &["documentation"], "a", "NONE")),
+            "Docs"
+        );
+        assert_eq!(
+            changelog_group(&pr("x", &["dependencies"], "a", "NONE")),
+            "Internal"
+        );
+        assert_eq!(
+            changelog_group(&pr("x", &["chore"], "a", "NONE")),
+            "Internal"
+        );
+        assert_eq!(
+            changelog_group(&pr("x", &[], "dependabot[bot]", "NONE")),
+            "Internal"
+        );
+        assert_eq!(changelog_group(&pr("x", &[], "a", "BOT")), "Internal");
+        assert_eq!(
+            changelog_group(&pr("misc tweak", &[], "a", "CONTRIBUTOR")),
+            "Other"
+        );
+        // breaking label wins over feat prefix
+        assert_eq!(
+            changelog_group(&pr("feat: api", &["breaking"], "a", "NONE")),
+            "Breaking"
+        );
+    }
+
+    #[test]
+    fn cadence_median() {
+        assert_eq!(cadence_days(&[]), None);
+        assert_eq!(cadence_days(&["2025-01-01T00:00:00Z".into()]), None);
+        let dates: Vec<String> = [
+            "2025-01-01T00:00:00Z",
+            "2025-01-11T00:00:00Z", // +10
+            "2025-02-01T00:00:00Z", // +21
+            "2025-02-11T00:00:00Z", // +10
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(cadence_days(&dates), Some(10)); // gaps [10,21,10] -> median 10
+        let mut rev = dates.clone();
+        rev.reverse();
+        assert_eq!(cadence_days(&rev), Some(10)); // order-independent
+    }
 }
