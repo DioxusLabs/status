@@ -27,15 +27,12 @@ pub fn Repos() -> Element {
                 Some(Ok(rows)) => {
                     let mut rows = rows;
                     match sort().as_str() {
-                        "stars" => rows.sort_by(|a, b| b.stars.cmp(&a.stars)),
-                        "prs" => rows.sort_by(|a, b| b.open_prs.cmp(&a.open_prs)),
-                        "issues" => rows.sort_by(|a, b| b.open_issues.cmp(&a.open_issues)),
+                        "stars" => rows.sort_by_key(|r| std::cmp::Reverse(r.stars)),
+                        "prs" => rows.sort_by_key(|r| std::cmp::Reverse(r.open_prs)),
+                        "issues" => rows.sort_by_key(|r| std::cmp::Reverse(r.open_issues)),
                         "name" => rows.sort_by(|a, b| a.name.cmp(&b.name)),
-                        _ => rows.sort_by(|a, b| {
-                            b.pushed_at
-                                .as_deref()
-                                .unwrap_or("")
-                                .cmp(a.pushed_at.as_deref().unwrap_or(""))
+                        _ => rows.sort_by_key(|r| {
+                            std::cmp::Reverse(r.pushed_at.as_deref().unwrap_or(""))
                         }),
                     }
                     rsx! {
