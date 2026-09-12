@@ -1,8 +1,13 @@
 use dioxus::prelude::*;
+use dioxus_primitives::checkbox::CheckboxState;
 
 use super::layout::AdminState;
 use super::widgets::{assoc_label, CiDot, ScoreBadge};
 use crate::api;
+use crate::components::checkbox::Checkbox;
+use crate::components::dropdown_menu::{DropdownMenu, DropdownMenuContent, DropdownMenuTrigger};
+use crate::components::input::Input;
+use crate::components::select::{Select, SelectOption};
 use crate::model::{PrFilter, PrRow, PrSort};
 
 const PR_COLUMNS: &[(&str, &str)] = &[
@@ -37,8 +42,9 @@ pub fn PullRequests() -> Element {
     let syncing = use_signal(|| false);
     let last_rows = use_signal(Vec::<PrRow>::new);
     let fetch_err = use_signal(|| Option::<String>::None);
+    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
     let mut columns = use_signal(default_columns);
-    let mut colmenu_open = use_signal(|| false);
+    let mut colmenu_open = use_signal(|| Some(false));
     #[cfg(feature = "web")]
     let mut cols_loaded = use_signal(|| false);
 
@@ -149,76 +155,62 @@ pub fn PullRequests() -> Element {
         div { class: "page",
             h1 { "Pull Requests" }
             div { class: "filter-bar",
-                input {
+                Input {
                     class: "search",
                     placeholder: "repo:x author:y label:z is:draft is:green is:approved is:conflict is:stale is:first-timer -label:z",
                     title: "GitHub-like tokens: repo:x author:y label:z -label:z is:draft is:green is:red is:approved is:conflict is:stale is:first-timer plus free text",
                     value: "{query}",
-                    oninput: move |e| query.set(e.value()),
-                    onkeydown: move |e| {
+                    oninput: move |e: FormEvent| query.set(e.value()),
+                    onkeydown: move |e: KeyboardEvent| {
                         if e.key() == Key::Enter {
                             committed.set(query());
                         }
                     },
                 }
-                select {
-                    class: "sort",
-                    onchange: move |e| {
-                        let s = match e.value().as_str() {
-                            "attention" => PrSort::Attention,
-                            "newest" => PrSort::Newest,
-                            "oldest" => PrSort::Oldest,
-                            "activity" => PrSort::LastActivity,
-                            "size" => PrSort::Size,
+                Select {
+                    default_value: "score".to_string(),
+                    on_value_change: move |v: Option<String>| {
+                        let s = match v.as_deref() {
+                            Some("attention") => PrSort::Attention,
+                            Some("newest") => PrSort::Newest,
+                            Some("oldest") => PrSort::Oldest,
+                            Some("activity") => PrSort::LastActivity,
+                            Some("size") => PrSort::Size,
                             _ => PrSort::Score,
                         };
                         sort.set(s);
                     },
-                    option { value: "score", selected: sort() == PrSort::Score, "Sort: score" }
-                    option { value: "attention", selected: sort() == PrSort::Attention, "Sort: attention" }
-                    option { value: "newest", "Sort: newest" }
-                    option { value: "oldest", "Sort: oldest" }
-                    option { value: "activity", "Sort: last activity" }
-                    option { value: "size", "Sort: size" }
-                }
-                div { class: "colmenu-wrap",
-                    button {
-                        onclick: move |_| colmenu_open.set(!colmenu_open()),
-                        "Columns ▾"
+                    for (i, (v, label)) in [
+                        ("score", "Sort: score"),
+                        ("attention", "Sort: attention"),
+                        ("newest", "Sort: newest"),
+                        ("oldest", "Sort: oldest"),
+                        ("activity", "Sort: last activity"),
+                        ("size", "Sort: size"),
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
+                        SelectOption::<String> {
+                            key: "{v}",
+                            value: v.to_string(),
+                            text_value: label.to_string(),
+                            index: i,
+                            "{label}"
+                        }
                     }
-                    if colmenu_open() {
-                        div { class: "colmenu",
-                            for (id, label) in PR_COLUMNS {
-                                {
-                                    let id = *id;
-                                    let checked = columns().iter().any(|c| c.as_str() == id);
-                                    let fixed = id == "title";
-                                    rsx! {
-                                        label { class: "check", key: "{id}",
-                                            input {
-                                                r#type: "checkbox",
-                                                checked: checked,
-                                                disabled: fixed,
-                                                onchange: move |e| {
-                                                    let mut cur = columns();
-                                                    if e.checked() {
-                                                        if !cur.iter().any(|c| c.as_str() == id) {
-                                                            cur = PR_COLUMNS
-                                                                .iter()
-                                                                .map(|(cid, _)| cid.to_string())
-                                                                .filter(|cid| cid == id || cur.contains(cid))
-                                                                .collect();
-                                                        }
-                                                    } else {
-                                                        cur.retain(|c| c != id);
-                                                    }
-                                                    columns.set(cur);
-                                                },
-                                            }
-                                            " {label}"
-                                        }
-                                    }
-                                }
+                }
+                DropdownMenu {
+                    open: colmenu_open,
+                    on_open_change: move |v: bool| colmenu_open.set(Some(v)),
+                    DropdownMenuTrigger { "Columns ▾" }
+                    DropdownMenuContent {
+                        for (id, label) in PR_COLUMNS {
+                            ColItem {
+                                key: "{id}",
+                                id: *id,
+                                label: *label,
+                                columns: columns,
                             }
                         }
                     }
@@ -599,4 +591,42 @@ fn urldecode(s: &str) -> String {
         }
     }
     out
+}
+
+/// One row in the Columns dropdown — a Checkbox + label that toggles a column
+/// without closing the menu.
+#[component]
+fn ColItem(id: &'static str, label: &'static str, mut columns: Signal<Vec<String>>) -> Element {
+    let state = use_memo(move || {
+        Some(if columns().iter().any(|c| c.as_str() == id) {
+            CheckboxState::Checked
+        } else {
+            CheckboxState::Unchecked
+        })
+    });
+    let fixed = id == "title";
+    rsx! {
+        label { class: "colrow",
+            Checkbox {
+                checked: state,
+                disabled: fixed,
+                on_checked_change: move |s: CheckboxState| {
+                    let mut cur = columns();
+                    if s == CheckboxState::Checked {
+                        if !cur.iter().any(|c| c.as_str() == id) {
+                            cur = PR_COLUMNS
+                                .iter()
+                                .map(|(cid, _)| cid.to_string())
+                                .filter(|cid| cid == id || cur.contains(cid))
+                                .collect();
+                        }
+                    } else {
+                        cur.retain(|c| c != id);
+                    }
+                    columns.set(cur);
+                },
+            }
+            "{label}"
+        }
+    }
 }

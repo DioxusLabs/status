@@ -3,6 +3,9 @@ use dioxus::prelude::*;
 use super::layout::AdminState;
 use super::widgets::assoc_label;
 use crate::api;
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::input::Input;
+use crate::components::select::{Select, SelectOption};
 use crate::model::*;
 
 fn days_since(published: Option<&str>) -> i64 {
@@ -190,8 +193,9 @@ fn ReleaseDetailBody(repo: String) -> Element {
                 if let Some(s) = &d.since {
                     span { class: "muted", " ({s})" }
                 }
-                button {
-                    class: "btn-sm",
+                Button {
+                    variant: ButtonVariant::Outline,
+                    size: ButtonSize::Sm,
                     style: "float: right",
                     onclick: move |_| {
                         let md = markdown.clone();
@@ -294,8 +298,9 @@ fn ReleaseDetailBody(repo: String) -> Element {
                         "{t.title}"
                     }
                     if admin {
-                        button {
-                            class: "btn-sm err",
+                        Button {
+                            variant: ButtonVariant::Ghost,
+                            size: ButtonSize::Xs,
                             onclick: move |_| {
                                 let id = t.id;
                                 spawn(async move {
@@ -311,31 +316,42 @@ fn ReleaseDetailBody(repo: String) -> Element {
             }
             if admin {
                 div { class: "filter-bar", style: "margin-top: 8px",
-                    input {
+                    Input {
                         placeholder: "version",
+                        style: "width: 110px",
                         value: "{form_version}",
-                        oninput: move |e| form_version.set(e.value()),
+                        oninput: move |e: FormEvent| form_version.set(e.value()),
                     }
-                    select {
-                        value: "{form_kind}",
-                        onchange: move |e| form_kind.set(e.value()),
-                        option { value: "pr", "pr" }
-                        option { value: "issue", "issue" }
-                        option { value: "note", "note" }
+                    Select {
+                        default_value: "pr".to_string(),
+                        on_value_change: move |v: Option<String>| {
+                            form_kind.set(v.unwrap_or_else(|| "pr".into()))
+                        },
+                        for (i, k) in ["pr", "issue", "note"].iter().enumerate() {
+                            SelectOption::<String> {
+                                key: "{k}",
+                                value: k.to_string(),
+                                text_value: k.to_string(),
+                                index: i,
+                                "{k}"
+                            }
+                        }
                     }
-                    input {
+                    Input {
                         placeholder: "#",
                         style: "width: 70px",
                         value: "{form_number}",
-                        oninput: move |e| form_number.set(e.value()),
+                        oninput: move |e: FormEvent| form_number.set(e.value()),
                     }
-                    input {
+                    Input {
                         placeholder: "title",
                         style: "flex: 1",
                         value: "{form_title}",
-                        oninput: move |e| form_title.set(e.value()),
+                        oninput: move |e: FormEvent| form_title.set(e.value()),
                     }
-                    button {
+                    Button {
+                        variant: ButtonVariant::Outline,
+                        size: ButtonSize::Sm,
                         onclick: move |_| {
                             let repo = repo.clone();
                             let version = if form_version().is_empty() {

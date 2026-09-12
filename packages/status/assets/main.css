@@ -141,7 +141,11 @@ a:hover { text-decoration: underline; }
 .filter-bar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
 .filter-bar input,
 .filter-bar select,
-.filter-bar button {
+.filter-bar button,
+.filter-bar .dx-input,
+.filter-bar .dx-button,
+.filter-bar .dx-select-trigger,
+.filter-bar .dx-dropdown-menu-trigger {
     height: 34px;
     padding: 0 10px;
     border: 1px solid var(--border);
@@ -150,8 +154,14 @@ a:hover { text-decoration: underline; }
     color: var(--text);
     font: inherit;
     font-size: 13px;
+    box-shadow: none;
 }
 .filter-bar input {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+.filter-bar .dx-input.search {
     flex: 1;
     font-family: var(--mono);
     font-size: 12px;
@@ -177,6 +187,21 @@ a:hover { text-decoration: underline; }
     padding: 7px 10px;
 }
 
+/* one row in the Columns dropdown */
+.colrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 10px;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text);
+    white-space: nowrap;
+}
+.colrow:hover { background: var(--bg); }
+
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .chip {
     background: var(--bg-raised);
@@ -198,23 +223,6 @@ a:hover { text-decoration: underline; }
 }
 @keyframes pulse { 50% { opacity: .4; } }
 
-.colmenu-wrap { position: relative; }
-.colmenu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 20;
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-width: 140px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.4);
-}
-.colmenu .check { font-size: 12px; }
 .btn-sm {
     background: var(--bg-raised);
     border: 1px solid var(--border);

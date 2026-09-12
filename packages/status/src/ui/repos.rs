@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use super::widgets::format_compact;
 use crate::api;
+use crate::components::select::{Select, SelectOption};
 use crate::model::RepoRow;
 use crate::Route;
 
@@ -13,14 +14,29 @@ pub fn Repos() -> Element {
         div { class: "page",
             div { class: "filter-bar",
                 h1 { "Repos" }
-                select {
-                    class: "sort",
-                    onchange: move |e| sort.set(e.value()),
-                    option { value: "pushed", selected: sort() == "pushed", "Sort: recently pushed" }
-                    option { value: "stars", selected: sort() == "stars", "Sort: stars" }
-                    option { value: "prs", selected: sort() == "prs", "Sort: open PRs" }
-                    option { value: "issues", selected: sort() == "issues", "Sort: open issues" }
-                    option { value: "name", selected: sort() == "name", "Sort: name" }
+                Select {
+                    default_value: "pushed".to_string(),
+                    on_value_change: move |v: Option<String>| {
+                        sort.set(v.unwrap_or_else(|| "pushed".into()))
+                    },
+                    for (i, (v, label)) in [
+                        ("pushed", "Sort: recently pushed"),
+                        ("stars", "Sort: stars"),
+                        ("prs", "Sort: open PRs"),
+                        ("issues", "Sort: open issues"),
+                        ("name", "Sort: name"),
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
+                        SelectOption::<String> {
+                            key: "{v}",
+                            value: v.to_string(),
+                            text_value: label.to_string(),
+                            index: i,
+                            "{label}"
+                        }
+                    }
                 }
             }
             match repos() {
