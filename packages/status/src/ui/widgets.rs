@@ -2,6 +2,11 @@ use dioxus::prelude::*;
 
 use crate::model::PrSummary;
 
+/// Date part (`YYYY-MM-DD`) of an RFC3339 timestamp; "" when missing.
+pub fn date_part(t: Option<&str>) -> &str {
+    t.and_then(|t| t.split('T').next()).unwrap_or("")
+}
+
 #[component]
 pub fn Sparkline(
     data: Vec<(String, i64)>,

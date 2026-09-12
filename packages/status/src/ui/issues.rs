@@ -1,51 +1,35 @@
 use dioxus::prelude::*;
 
 use super::cache::use_cached;
+use super::storage::use_debounced;
+use super::widgets::date_part;
 use crate::api;
+use crate::components::input::Input;
+use crate::components::select::{Select, SelectOption};
 use crate::model::{IssueFilter, IssueRow};
 
 #[component]
 pub fn Issues() -> Element {
     let mut query = use_signal(String::new);
-    let mut committed = use_signal(String::new);
+    let committed = use_debounced(query.into(), 300);
     let mut sort = use_signal(|| "updated".to_string());
 
-    let pending = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(0u32)));
-    use_effect(move || {
-        let q = query();
-        let rev = pending.get() + 1;
-        pending.set(rev);
-        let pending = pending.clone();
-        spawn(async move {
-            super::sleep_ms(300).await;
-            if pending.get() == rev {
-                committed.set(q);
-            }
-        });
+    let filter = use_memo(move || IssueFilter {
+        query: committed(),
+        state: Some("open".into()),
+        sort: Some(sort()),
+        limit: 200,
+        ..Default::default()
     });
-
     let issues = use_cached(
         move || {
-            let filter = IssueFilter {
-                query: committed(),
-                state: Some("open".into()),
-                sort: Some(sort()),
-                limit: 200,
-                ..Default::default()
-            };
             format!(
                 "issues:{}",
-                serde_json::to_string(&filter).unwrap_or_default()
+                serde_json::to_string(&filter()).unwrap_or_default()
             )
         },
         move || {
-            let filter = IssueFilter {
-                query: committed(),
-                state: Some("open".into()),
-                sort: Some(sort()),
-                limit: 200,
-                ..Default::default()
-            };
+            let filter = filter();
             async move { api::list_issues(filter).await }
         },
     )?;
@@ -60,19 +44,36 @@ pub fn Issues() -> Element {
                 p { class: "muted", "error: {e}" }
             }
             div { class: "filter-bar",
-                input {
+                Input {
                     class: "search",
                     placeholder: "repo:x author:y + free text",
                     value: "{query}",
-                    oninput: move |e| query.set(e.value()),
+                    oninput: move |e: FormEvent| query.set(e.value()),
                 }
-                select {
-                    class: "sort",
-                    onchange: move |e| sort.set(e.value()),
-                    option { value: "updated", "Sort: recent activity" }
-                    option { value: "oldest", "Sort: oldest" }
-                    option { value: "comments", "Sort: most comments" }
-                    option { value: "reactions", "Sort: most reactions" }
+                Select {
+                    default_value: "updated".to_string(),
+                    on_value_change: move |v: Option<String>| {
+                        if let Some(v) = v {
+                            sort.set(v);
+                        }
+                    },
+                    for (i, (v, label)) in [
+                        ("updated", "Sort: recent activity"),
+                        ("oldest", "Sort: oldest"),
+                        ("comments", "Sort: most comments"),
+                        ("reactions", "Sort: most reactions"),
+                    ]
+                    .iter()
+                    .enumerate()
+                    {
+                        SelectOption::<String> {
+                            key: "{v}",
+                            value: v.to_string(),
+                            text_value: label.to_string(),
+                            index: i,
+                            "{label}"
+                        }
+                    }
                 }
             }
             match (issues.value)() {
@@ -104,12 +105,7 @@ pub fn Issues() -> Element {
 
 #[component]
 fn IssueRowEl(issue: IssueRow) -> Element {
-    let updated = issue
-        .updated_at
-        .as_deref()
-        .and_then(|t| t.split('T').next())
-        .unwrap_or("")
-        .to_string();
+    let updated = date_part(issue.updated_at.as_deref()).to_string();
     rsx! {
         tr { class: "row",
             td { class: "mono", "{issue.repo}" }

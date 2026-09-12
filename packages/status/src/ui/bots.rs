@@ -159,7 +159,7 @@ pub fn DevinPanel(repo: String, number: i64) -> Element {
                     on_open_change: move |v: bool| custom_open.set(v),
                     h3 { "Custom action" }
                     textarea {
-                        class: "crates",
+                        class: "dialog-text",
                         rows: 6,
                         placeholder: "Instructions for the agent…",
                         value: "{custom_text}",
@@ -367,7 +367,7 @@ pub fn Bots() -> Element {
                 },
                 h3 { "Message session" }
                 textarea {
-                    class: "crates",
+                    class: "dialog-text",
                     rows: 5,
                     value: "{msg_text}",
                     oninput: move |e| msg_text.set(e.value()),

@@ -9,6 +9,7 @@ mod releases;
 mod repo_detail;
 mod repos;
 mod settings;
+pub mod storage;
 mod widgets;
 
 pub use bots::Bots;

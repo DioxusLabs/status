@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use super::cache::use_cached;
 use super::layout::AdminState;
+use super::storage::{use_debounced, use_persisted_signal_checked};
 use super::widgets::{assoc_label, CiDot, MenuCheckbox, ScoreBadge};
 use crate::api;
 use crate::components::dropdown_menu::{DropdownMenu, DropdownMenuContent, DropdownMenuTrigger};
@@ -33,83 +34,37 @@ fn default_columns() -> Vec<String> {
 #[component]
 pub fn PullRequests() -> Element {
     let mut query = use_signal(String::new);
-    let mut committed = use_signal(String::new);
+    let mut committed = use_debounced(query.into(), 300);
     let mut sort = use_signal(|| PrSort::Score);
     let mut repos_sel = use_signal(Vec::<String>::new);
     let expanded = use_signal(|| Option::<(String, i64)>::None);
     let detail = use_signal(|| Option::<crate::model::PrDetail>::None);
     let syncing = use_signal(|| false);
-    #[cfg_attr(not(feature = "web"), allow(unused_mut))]
-    let mut columns = use_signal(default_columns);
+    let columns = use_signal(default_columns);
     let mut colmenu_open = use_signal(|| Some(false));
-    #[cfg(feature = "web")]
-    let mut cols_loaded = use_signal(|| false);
 
     let repos = use_cached(|| "repos".to_string(), || async { api::list_repos().await })?;
 
-    // Persist column selection (web only).
-    #[cfg(feature = "web")]
-    {
-        use_hook(move || {
-            spawn(async move {
-                if let Ok(v) = document::eval("return localStorage.getItem('prs.columns') ?? ''")
-                    .await
-                    .map_err(|e| e.to_string())
-                    .map(|v| v.as_str().unwrap_or_default().to_string())
-                {
-                    if let Some(saved) = (!v.is_empty())
-                        .then(|| serde_json::from_str::<Vec<String>>(&v).ok())
-                        .flatten()
-                    {
-                        let saved: Vec<String> = saved
-                            .into_iter()
-                            .filter(|c| PR_COLUMNS.iter().any(|(id, _)| id == c))
-                            .collect();
-                        if saved.iter().any(|c| c == "title") {
-                            columns.set(saved);
-                        }
-                    }
-                }
-                cols_loaded.set(true);
-            });
-        });
-        use_effect(move || {
-            let cols = columns();
-            if !cols_loaded() {
-                return;
-            }
-            document::eval(&format!(
-                "localStorage.setItem('prs.columns', '{}')",
-                serde_json::to_string(&cols).unwrap_or_default()
-            ));
-        });
-    }
+    // Persist column selection (web only), keeping only known ids and
+    // requiring "title" to survive sanitizing.
+    use_persisted_signal_checked("prs.columns", columns, |cols: Vec<String>| {
+        let cols: Vec<String> = cols
+            .into_iter()
+            .filter(|c| PR_COLUMNS.iter().any(|(id, _)| id == c))
+            .collect();
+        cols.iter().any(|c| c == "title").then_some(cols)
+    });
 
-    // Debounce the free-text query and reflect filters in the URL.
-    let pending = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(0u32)));
+    // Reflect the committed query in the URL (client only).
+    #[cfg(feature = "web")]
     use_effect(move || {
-        let q = query();
-        let rev = pending.get() + 1;
-        pending.set(rev);
-        let pending = pending.clone();
-        spawn(async move {
-            super::sleep_ms(300).await;
-            if pending.get() != rev {
-                return;
-            }
-            if committed() != q {
-                committed.set(q.clone());
-            }
-            #[cfg(feature = "web")]
-            {
-                let qs = if q.is_empty() {
-                    String::new()
-                } else {
-                    format!("?q={}", urlencode(&q))
-                };
-                document::eval(&format!("history.replaceState(null, '', '/prs{qs}')"));
-            }
-        });
+        let q = committed();
+        let qs = if q.is_empty() {
+            String::new()
+        } else {
+            format!("?q={}", urlencoding::encode(&q))
+        };
+        document::eval(&format!("history.replaceState(null, '', '/prs{qs}')"));
     });
 
     // Initial query from the URL (client only).
@@ -123,7 +78,7 @@ pub fn PullRequests() -> Element {
             {
                 for pair in v.trim_start_matches('?').split('&') {
                     if let Some(q) = pair.strip_prefix("q=") {
-                        let q = urldecode(q);
+                        let q = urlencoding::decode(q).unwrap_or_default().into_owned();
                         query.set(q.clone());
                         if committed() != q {
                             committed.set(q);
@@ -281,27 +236,23 @@ fn PrsTable(
     mut syncing: Signal<bool>,
     columns: Signal<Vec<String>>,
 ) -> Element {
+    let filter = use_memo(move || PrFilter {
+        repos: repos_sel(),
+        query: committed(),
+        state: Some("open".into()),
+        sort: sort(),
+        limit: 200,
+        ..Default::default()
+    });
     let prs = use_cached(
         move || {
-            let filter = PrFilter {
-                repos: repos_sel(),
-                query: committed(),
-                state: Some("open".into()),
-                sort: sort(),
-                limit: 200,
-                ..Default::default()
-            };
-            format!("prs:{}", serde_json::to_string(&filter).unwrap_or_default())
+            format!(
+                "prs:{}",
+                serde_json::to_string(&filter()).unwrap_or_default()
+            )
         },
         move || {
-            let filter = PrFilter {
-                repos: repos_sel(),
-                query: committed(),
-                state: Some("open".into()),
-                sort: sort(),
-                limit: 200,
-                ..Default::default()
-            };
+            let filter = filter();
             async move { api::list_prs(filter).await }
         },
     )?;
@@ -535,38 +486,6 @@ fn review_label(r: &str) -> &'static str {
         "REVIEW_REQUIRED" => "required",
         _ => "—",
     }
-}
-
-#[cfg(feature = "web")]
-fn urlencode(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || "-_.~".contains(c) {
-                c.to_string()
-            } else {
-                format!("%{:02X}", c as u32)
-            }
-        })
-        .collect()
-}
-
-#[cfg(feature = "web")]
-fn urldecode(s: &str) -> String {
-    let mut out = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let h: String = chars.by_ref().take(2).collect();
-            if let Ok(b) = u8::from_str_radix(&h, 16) {
-                out.push(b as char);
-            }
-        } else if c == '+' {
-            out.push(' ');
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 /// One row in the Columns dropdown — a Checkbox + label that toggles a column

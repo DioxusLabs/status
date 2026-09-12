@@ -225,8 +225,7 @@ fn ReleaseDetailBody(repo: String) -> Element {
             }
             if d.unreleased.is_empty() {
                 p { class: "muted", "no merged PRs since the last release" }
-            } else {}
-            if !d.unreleased.is_empty() {
+            } else {
                 table { class: "data fixed",
                     colgroup {
                         col { style: "width: 90px" }

@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use super::cache::use_cached;
+use super::storage::use_persisted_signal;
 use super::widgets::MenuCheckbox;
 use super::widgets::{format_compact, PrSummaryList};
 use crate::api;
@@ -41,40 +42,9 @@ impl RepoFilter {
 pub fn Overview() -> Element {
     let mut selected = use_signal(|| RepoFilter::All);
     let mut menu_open = use_signal(|| Some(false));
-    #[cfg(feature = "web")]
-    let mut repos_loaded = use_signal(|| false);
     let repos = use_cached(|| "repos".to_string(), || async { api::list_repos().await })?;
 
-    #[cfg(feature = "web")]
-    {
-        use_hook(move || {
-            spawn(async move {
-                if let Ok(v) = document::eval("return localStorage.getItem('overview.repos') ?? ''")
-                    .await
-                    .map_err(|e| e.to_string())
-                    .map(|v| v.as_str().unwrap_or_default().to_string())
-                {
-                    if let Some(saved) = (!v.is_empty())
-                        .then(|| serde_json::from_str::<RepoFilter>(&v).ok())
-                        .flatten()
-                    {
-                        selected.set(saved);
-                    }
-                }
-                repos_loaded.set(true);
-            });
-        });
-        use_effect(move || {
-            let repos = selected();
-            if !repos_loaded() {
-                return;
-            }
-            document::eval(&format!(
-                "localStorage.setItem('overview.repos', '{}')",
-                serde_json::to_string(&repos).unwrap_or_default()
-            ));
-        });
-    }
+    use_persisted_signal("overview.repos", selected);
 
     let overview = use_cached(
         move || {

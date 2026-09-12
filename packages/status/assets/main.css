@@ -357,7 +357,8 @@ td.title a:hover { color: var(--accent); }
     margin-bottom: 10px;
 }
 .check { font-size: 13px; color: var(--text-muted); }
-textarea.crates {
+textarea.crates,
+textarea.dialog-text {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);

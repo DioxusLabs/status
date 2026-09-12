@@ -77,12 +77,7 @@ pub fn Repos() -> Element {
 
 #[component]
 fn RepoCard(repo: RepoRow) -> Element {
-    let pushed = repo
-        .pushed_at
-        .as_deref()
-        .and_then(|t| t.split('T').next())
-        .unwrap_or("")
-        .to_string();
+    let pushed = super::widgets::date_part(repo.pushed_at.as_deref()).to_string();
     rsx! {
         Link {
             class: "repo-card",
