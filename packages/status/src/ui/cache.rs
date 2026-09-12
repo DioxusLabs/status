@@ -131,6 +131,15 @@ where
         }
     }
 
+    // Read the key during render so a key change re-renders, then prefer the
+    // current key's cached entry — after a key change the loader still holds
+    // the previous key's value while it refetches in the background.
+    if let Some(cached) = cache_get::<T>(&key()) {
+        if value.peek().as_ref() != Some(&cached) {
+            value.set(Some(cached));
+        }
+    }
+
     Ok(Cached {
         value: value.into(),
         loading: loading.into(),
