@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use crate::model::*;
 
 #[cfg(feature = "server")]
-use crate::backend::{auth, collector, db};
+use crate::backend::{actions, auth, collector, db, devin, env};
 
 #[cfg(feature = "server")]
 fn pr_summary(p: &db::DbPr) -> PrSummary {
@@ -469,6 +469,9 @@ pub async fn get_settings() -> Result<SettingsView> {
         repos,
         crates,
         sync_log: db::sync_log(50).await?,
+        devin_configured: devin::configured(),
+        devin_budget_used: db::budget_used_today().await.unwrap_or(0),
+        devin_budget_total: db::budget_limit().await.unwrap_or(0),
     })
 }
 
@@ -507,4 +510,89 @@ pub async fn set_crates(names: Vec<String>) -> Result<()> {
 pub async fn sync_now(kind: String) -> Result<String> {
     auth::require_admin()?;
     collector::run_sync(&kind).await.map_err(Into::into)
+}
+
+#[post("/api/settings/budget")]
+pub async fn set_llm_budget(value: i64) -> Result<()> {
+    auth::require_admin()?;
+    db::set_setting("llm_daily_budget", &value.to_string()).await?;
+    Ok(())
+}
+
+#[post("/api/devin/dispatch")]
+pub async fn dispatch_action(
+    repo: String,
+    number: i64,
+    kind: String,
+    custom_prompt: Option<String>,
+) -> Result<DevinSessionRow> {
+    auth::require_admin()?;
+    actions::dispatch(&repo, number, &kind, custom_prompt.as_deref())
+        .await
+        .map_err(Into::into)
+}
+
+#[post("/api/devin/assess")]
+pub async fn assess_pr(repo: String, number: i64, force: bool) -> Result<AssessmentView> {
+    auth::require_admin()?;
+    actions::dispatch_assess(&repo, number, force)
+        .await
+        .map_err(Into::into)
+}
+
+#[get("/api/devin/assessment")]
+pub async fn get_assessment(repo: String, number: i64) -> Result<Option<AssessmentView>> {
+    let pr = db::get_pr(&repo, number).await?;
+    match pr {
+        Some(p) => db::get_assessment(&repo, number, &p.head_sha)
+            .await
+            .map_err(Into::into),
+        None => Ok(None),
+    }
+}
+
+#[get("/api/devin/sessions")]
+pub async fn list_sessions(
+    repo: Option<String>,
+    number: Option<i64>,
+    limit: i64,
+) -> Result<Vec<DevinSessionRow>> {
+    let mut rows = db::list_devin_sessions(repo.as_deref(), number, limit).await?;
+    if !auth::is_admin() {
+        for r in &mut rows {
+            r.prompt.clear();
+        }
+    }
+    Ok(rows)
+}
+
+#[post("/api/devin/refresh")]
+pub async fn refresh_session(session_id: String) -> Result<DevinSessionRow> {
+    auth::require_admin()?;
+    let row = db::get_devin_session(&session_id)
+        .await?
+        .context("unknown session")?;
+    actions::poll_session(&row).await?;
+    db::get_devin_session(&session_id)
+        .await?
+        .context("unknown session")
+        .map_err(Into::into)
+}
+
+#[post("/api/devin/message")]
+pub async fn send_session_message(session_id: String, message: String) -> Result<()> {
+    auth::require_admin()?;
+    devin::send_message(&session_id, &message)
+        .await
+        .map_err(Into::into)
+}
+
+#[get("/api/devin_status")]
+pub async fn get_devin_status() -> Result<DevinStatus> {
+    Ok(DevinStatus {
+        configured: devin::configured(),
+        budget_used: db::budget_used_today().await.unwrap_or(0),
+        budget_total: db::budget_limit().await.unwrap_or(0),
+        api_base: env::devin_api_base(),
+    })
 }

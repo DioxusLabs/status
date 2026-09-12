@@ -377,6 +377,67 @@ pub async fn mark_pr_state(repo: &str, number: i64, state: &str) -> anyhow::Resu
     Ok(())
 }
 
+pub async fn open_issue_numbers(repo: &str) -> anyhow::Result<Vec<i64>> {
+    let rows: Vec<(i64,)> =
+        sqlx::query_as("SELECT number FROM issues WHERE repo = ? AND state = 'open'")
+            .bind(repo)
+            .fetch_all(pool())
+            .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
+pub async fn mark_issue_state(repo: &str, number: i64, state: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE issues SET state = ?, closed_at = COALESCE(closed_at, ?) WHERE repo = ? AND number = ?")
+        .bind(state)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(repo)
+        .bind(number)
+        .execute(pool())
+        .await?;
+    Ok(())
+}
+
+/// Closed/merged sync upsert: update only lifecycle columns when the row
+/// exists so richer fields from the open-PR sync aren't blanked.
+pub async fn update_pr_lifecycle(p: &DbPr) -> anyhow::Result<()> {
+    let res = sqlx::query(
+        "UPDATE pull_requests SET state=?, merged_at=?, closed_at=?, updated_at=?,
+            labels_json=?, last_activity_at=? WHERE id=?",
+    )
+    .bind(&p.state)
+    .bind(&p.merged_at)
+    .bind(&p.closed_at)
+    .bind(&p.updated_at)
+    .bind(&p.labels_json)
+    .bind(&p.last_activity_at)
+    .bind(p.id)
+    .execute(pool())
+    .await?;
+    if res.rows_affected() == 0 {
+        upsert_pr(p).await?;
+    }
+    Ok(())
+}
+
+pub async fn update_issue_lifecycle(i: &DbIssue) -> anyhow::Result<()> {
+    let res = sqlx::query(
+        "UPDATE issues SET state=?, closed_at=?, updated_at=?, labels_json=?,
+            last_activity_at=? WHERE id=?",
+    )
+    .bind(&i.state)
+    .bind(&i.closed_at)
+    .bind(&i.updated_at)
+    .bind(&i.labels_json)
+    .bind(&i.last_activity_at)
+    .bind(i.id)
+    .execute(pool())
+    .await?;
+    if res.rows_affected() == 0 {
+        upsert_issue(i).await?;
+    }
+    Ok(())
+}
+
 pub async fn log_sync(
     kind: &str,
     repo: &str,
@@ -496,4 +557,291 @@ pub async fn repos_empty() -> anyhow::Result<bool> {
         .fetch_one(pool())
         .await?;
     Ok(n == 0)
+}
+
+#[derive(FromRow)]
+pub(crate) struct DbDevinSession {
+    pub id: i64,
+    pub session_id: Option<String>,
+    pub url: Option<String>,
+    pub kind: String,
+    pub repo: String,
+    pub number: i64,
+    pub head_sha: Option<String>,
+    pub title: Option<String>,
+    pub prompt: String,
+    pub status: String,
+    pub result_pr_url: Option<String>,
+    pub acus_consumed: Option<f64>,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_polled_at: Option<String>,
+}
+
+impl From<DbDevinSession> for DevinSessionRow {
+    fn from(s: DbDevinSession) -> Self {
+        DevinSessionRow {
+            id: s.id,
+            session_id: s.session_id.unwrap_or_default(),
+            url: s.url.unwrap_or_default(),
+            kind: s.kind,
+            repo: s.repo,
+            number: s.number,
+            head_sha: s.head_sha.unwrap_or_default(),
+            title: s.title.unwrap_or_default(),
+            prompt: s.prompt,
+            status: s.status,
+            result_pr_url: s.result_pr_url.unwrap_or_default(),
+            acus_consumed: s.acus_consumed,
+            error: s.error.unwrap_or_default(),
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+            last_polled_at: s.last_polled_at,
+        }
+    }
+}
+
+pub struct NewDevinSession<'a> {
+    pub session_id: &'a str,
+    pub url: &'a str,
+    pub kind: &'a str,
+    pub repo: &'a str,
+    pub number: i64,
+    pub head_sha: &'a str,
+    pub title: &'a str,
+    pub prompt: &'a str,
+}
+
+pub async fn insert_devin_session(s: &NewDevinSession<'_>) -> anyhow::Result<i64> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        "INSERT INTO devin_sessions (session_id, url, kind, repo, number, head_sha, title,
+            prompt, status, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?, 'created', ?, ?)",
+    )
+    .bind(s.session_id)
+    .bind(s.url)
+    .bind(s.kind)
+    .bind(s.repo)
+    .bind(s.number)
+    .bind(s.head_sha)
+    .bind(s.title)
+    .bind(s.prompt)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool())
+    .await?;
+    Ok(res.last_insert_rowid())
+}
+
+pub async fn list_devin_sessions(
+    repo: Option<&str>,
+    number: Option<i64>,
+    limit: i64,
+) -> anyhow::Result<Vec<DevinSessionRow>> {
+    let rows = sqlx::query_as::<_, DbDevinSession>(
+        "SELECT * FROM devin_sessions
+         WHERE (? IS NULL OR repo = ?) AND (? IS NULL OR number = ?)
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(repo)
+    .bind(repo)
+    .bind(number)
+    .bind(number)
+    .bind(limit.clamp(1, 500))
+    .fetch_all(pool())
+    .await?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub async fn get_devin_session(session_id: &str) -> anyhow::Result<Option<DevinSessionRow>> {
+    let row =
+        sqlx::query_as::<_, DbDevinSession>("SELECT * FROM devin_sessions WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_optional(pool())
+            .await?;
+    Ok(row.map(Into::into))
+}
+
+pub async fn pending_devin_sessions(limit: i64) -> anyhow::Result<Vec<DevinSessionRow>> {
+    let rows = sqlx::query_as::<_, DbDevinSession>(
+        "SELECT * FROM devin_sessions
+         WHERE status IN ('created','working','blocked')
+         ORDER BY id LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool())
+    .await?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub async fn update_devin_session(
+    session_id: &str,
+    status: &str,
+    result_pr_url: Option<&str>,
+    structured_output: Option<&str>,
+    acus_consumed: Option<f64>,
+    error: Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE devin_sessions SET status=?, result_pr_url=COALESCE(?, result_pr_url),
+            structured_output_json=COALESCE(?, structured_output_json),
+            acus_consumed=COALESCE(?, acus_consumed), error=?,
+            updated_at=?, last_polled_at=?
+         WHERE session_id=?",
+    )
+    .bind(status)
+    .bind(result_pr_url)
+    .bind(structured_output)
+    .bind(acus_consumed)
+    .bind(error)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(session_id)
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+#[derive(FromRow)]
+pub(crate) struct DbAssessment {
+    pub repo: String,
+    pub number: i64,
+    pub head_sha: String,
+    pub session_id: Option<String>,
+    pub verdict: Option<String>,
+    pub summary: Option<String>,
+    pub risks_json: Option<String>,
+    pub suggestions_json: Option<String>,
+    pub quality_score: Option<i64>,
+    pub created_at: String,
+}
+
+impl From<DbAssessment> for AssessmentView {
+    fn from(a: DbAssessment) -> Self {
+        AssessmentView {
+            repo: a.repo,
+            number: a.number,
+            head_sha: a.head_sha,
+            session_id: a.session_id.unwrap_or_default(),
+            verdict: a.verdict.unwrap_or_default(),
+            summary: a.summary.unwrap_or_default(),
+            risks: json_vec(&a.risks_json.unwrap_or_default()),
+            suggestions: json_vec(&a.suggestions_json.unwrap_or_default()),
+            quality_score: a.quality_score.unwrap_or_default(),
+            created_at: a.created_at,
+        }
+    }
+}
+
+pub async fn get_assessment(
+    repo: &str,
+    number: i64,
+    head_sha: &str,
+) -> anyhow::Result<Option<AssessmentView>> {
+    let row = sqlx::query_as::<_, DbAssessment>(
+        "SELECT * FROM pr_assessments WHERE repo=? AND number=? AND head_sha=?",
+    )
+    .bind(repo)
+    .bind(number)
+    .bind(head_sha)
+    .fetch_optional(pool())
+    .await?;
+    Ok(row.map(Into::into))
+}
+
+pub async fn upsert_assessment(
+    repo: &str,
+    number: i64,
+    head_sha: &str,
+    session_id: &str,
+    output: &serde_json::Value,
+) -> anyhow::Result<()> {
+    let verdict = output["verdict"].as_str().unwrap_or_default();
+    let summary = output["summary"].as_str().unwrap_or_default();
+    let risks = serde_json::to_string(&output["risks"].as_array().cloned().unwrap_or_default())
+        .unwrap_or_else(|_| "[]".into());
+    let suggestions = serde_json::to_string(
+        &output["suggestions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+    )
+    .unwrap_or_else(|_| "[]".into());
+    let score = output["quality_score"].as_i64().unwrap_or(0);
+    sqlx::query(
+        "INSERT INTO pr_assessments (repo, number, head_sha, session_id, verdict, summary,
+            risks_json, suggestions_json, quality_score, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(repo, number, head_sha) DO UPDATE SET session_id=excluded.session_id,
+            verdict=excluded.verdict, summary=excluded.summary, risks_json=excluded.risks_json,
+            suggestions_json=excluded.suggestions_json, quality_score=excluded.quality_score",
+    )
+    .bind(repo)
+    .bind(number)
+    .bind(head_sha)
+    .bind(session_id)
+    .bind(verdict)
+    .bind(summary)
+    .bind(risks)
+    .bind(suggestions)
+    .bind(score)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+fn today() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+pub async fn budget_used_today() -> anyhow::Result<i64> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT used FROM llm_budget WHERE day = ?")
+        .bind(today())
+        .fetch_optional(pool())
+        .await?;
+    Ok(row.map(|r| r.0).unwrap_or(0))
+}
+
+/// Daily limit: `settings.llm_daily_budget` overrides env `LLM_DAILY_BUDGET`.
+pub async fn budget_limit() -> anyhow::Result<i64> {
+    if let Ok(Some(v)) = get_setting("llm_daily_budget").await {
+        if let Ok(n) = v.parse() {
+            return Ok(n);
+        }
+    }
+    Ok(super::env::llm_daily_budget())
+}
+
+fn budget_check(used: i64, total: i64) -> anyhow::Result<()> {
+    if used >= total {
+        anyhow::bail!("daily budget reached ({used}/{total})");
+    }
+    Ok(())
+}
+
+/// Consume one unit of today's LLM budget. Errors when the day is at the limit.
+pub async fn budget_consume() -> anyhow::Result<()> {
+    budget_check(budget_used_today().await?, budget_limit().await?)?;
+    sqlx::query(
+        "INSERT INTO llm_budget (day, used) VALUES (?, 1)
+         ON CONFLICT(day) DO UPDATE SET used = used + 1",
+    )
+    .bind(today())
+    .execute(pool())
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn budget_check_blocks_at_limit() {
+        assert!(super::budget_check(0, 50).is_ok());
+        assert!(super::budget_check(49, 50).is_ok());
+        let e = super::budget_check(50, 50).unwrap_err().to_string();
+        assert!(e.contains("daily budget reached (50/50)"), "{e}");
+    }
 }

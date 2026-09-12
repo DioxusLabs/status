@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 
 use tracing::{info, warn};
 
-use super::{crates_io, db, env, github};
+use super::{actions, crates_io, db, devin, env, github};
 
 static GUARDS: OnceLock<
     std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -196,5 +196,38 @@ pub fn start() {
     spawn_periodic("crates", env::crates_interval(), true);
     spawn_periodic("releases", env::releases_interval(), false);
     spawn_periodic("snapshots", env::snapshots_interval(), true);
+    spawn_devin_poller();
     info!("collectors started");
+}
+
+/// Poll in-flight Devin sessions every 60s; the only background work that
+/// touches the Devin API.
+fn spawn_devin_poller() {
+    if !devin::configured() {
+        return;
+    }
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            match db::pending_devin_sessions(20).await {
+                Ok(rows) => {
+                    for row in rows {
+                        if let Err(e) = actions::poll_session(&row).await {
+                            warn!("devin poll {}: {e:#}", row.session_id);
+                            let _ = db::update_devin_session(
+                                &row.session_id,
+                                "error",
+                                None,
+                                None,
+                                None,
+                                Some(&format!("{e:#}")),
+                            )
+                            .await;
+                        }
+                    }
+                }
+                Err(e) => warn!("devin poll list: {e:#}"),
+            }
+        }
+    });
 }

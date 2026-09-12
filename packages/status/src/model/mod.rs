@@ -226,4 +226,49 @@ pub struct SettingsView {
     pub repos: Vec<RepoRow>,
     pub crates: Vec<String>,
     pub sync_log: Vec<SyncLogRow>,
+    pub devin_configured: bool,
+    pub devin_budget_used: i64,
+    pub devin_budget_total: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DevinSessionRow {
+    pub id: i64,
+    pub session_id: String,
+    pub url: String,
+    pub kind: String,
+    pub repo: String,
+    pub number: i64,
+    pub head_sha: String,
+    pub title: String,
+    pub prompt: String,
+    pub status: String,
+    pub result_pr_url: String,
+    pub acus_consumed: Option<f64>,
+    pub error: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_polled_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AssessmentView {
+    pub repo: String,
+    pub number: i64,
+    pub head_sha: String,
+    pub session_id: String,
+    pub verdict: String,
+    pub summary: String,
+    pub risks: Vec<String>,
+    pub suggestions: Vec<String>,
+    pub quality_score: i64,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DevinStatus {
+    pub configured: bool,
+    pub budget_used: i64,
+    pub budget_total: i64,
+    pub api_base: String,
 }
