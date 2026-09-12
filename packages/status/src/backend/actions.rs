@@ -166,7 +166,7 @@ pub async fn dispatch(
         .await?
         .with_context(|| format!("PR {repo}#{number} not in database"))?;
     let prompt = build_prompt(kind, &pr, custom)?;
-    db::budget_consume().await?;
+    db::budget_check_now().await?;
     let is_assess = kind == "assess";
     let tags = vec![
         "status-dashboard".to_string(),
@@ -182,6 +182,7 @@ pub async fn dispatch(
         is_assess.then_some(2),
     )
     .await?;
+    db::budget_consume().await?;
     let id = db::insert_devin_session(&db::NewDevinSession {
         session_id: &created.session_id,
         url: &created.url,
@@ -244,7 +245,7 @@ pub async fn poll_session(row: &DevinSessionRow) -> anyhow::Result<()> {
         None,
     )
     .await?;
-    if status == "finished" && row.kind == "assess" {
+    if row.kind == "assess" {
         if let Some(out) = info.structured_output {
             db::upsert_assessment(&row.repo, row.number, &row.head_sha, &row.session_id, &out)
                 .await?;

@@ -171,7 +171,7 @@ fn PrsTable(
     expanded: Signal<Option<(String, i64)>>,
     detail: Signal<Option<crate::model::PrDetail>>,
 ) -> Element {
-    let prs = use_resource(move || async move {
+    let prs = use_server_future(move || {
         let filter = PrFilter {
             repos: repos_sel(),
             query: committed(),
@@ -180,11 +180,10 @@ fn PrsTable(
             limit: 200,
             ..Default::default()
         };
-        api::list_prs(filter).await
-    });
-    let prs = prs.suspend()?;
-    let out = match &*prs.read() {
-        Ok(rows) => rsx! {
+        async move { api::list_prs(filter).await }
+    })?;
+    let out = match &*prs.value().read() {
+        Some(Ok(rows)) => rsx! {
             table { class: "data",
                 thead {
                     tr {
@@ -212,7 +211,8 @@ fn PrsTable(
                 }
             }
         },
-        Err(e) => rsx! { p { class: "muted", "error: {e}" } },
+        Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
+        None => rsx! { p { class: "muted", "loading…" } },
     };
     out
 }

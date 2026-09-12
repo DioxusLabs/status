@@ -18,16 +18,15 @@ pub fn RepoDetail(name: String) -> Element {
 #[component]
 fn RepoDetailBody(name: String) -> Element {
     let mut tab = use_signal(|| "overview".to_string());
-    let detail = use_resource({
+    let detail = use_server_future({
         let name = name.clone();
         move || {
             let name = name.clone();
             async move { api::get_repo(name).await }
         }
-    });
-    let detail = detail.suspend()?;
-    let out = match &*detail.read() {
-        Ok(d) => rsx! {
+    })?;
+    let out = match &*detail.value().read() {
+        Some(Ok(d)) => rsx! {
                     h1 { "{d.repo.name}" }
                     p { class: "muted", "{d.repo.description}" }
                     div { class: "health-strip",
@@ -131,7 +130,8 @@ fn RepoDetailBody(name: String) -> Element {
                         },
                     }
         },
-        Err(e) => rsx! { p { class: "muted", "error: {e}" } },
+        Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
+        None => rsx! { p { class: "muted", "loading…" } },
     };
     out
 }

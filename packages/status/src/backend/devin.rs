@@ -56,12 +56,14 @@ pub struct PullRequest {
     pub pr_url: String,
 }
 
-/// Map Devin's v3 status + status_detail to our status column.
+/// Map Devin's v3 status + status_detail to our status column. A populated
+/// result (structured output or a PR) counts as finished for any status —
+/// `structured_output_required` sessions stop at waiting_for_user when done.
 pub fn map_status(status: &str, detail: Option<&str>, has_result: bool) -> String {
     match (status, detail) {
+        _ if has_result => "finished",
         ("exit", _) | (_, Some("finished")) => "finished",
         ("error", _) | (_, Some("error")) => "error",
-        ("suspended", _) if has_result => "finished",
         ("suspended", _) => "blocked",
         ("running", Some("waiting_for_user" | "waiting_for_approval")) => "blocked",
         ("new" | "claimed" | "resuming", _) => "created",
@@ -139,4 +141,26 @@ pub async fn send_message(session_id: &str, message: &str) -> anyhow::Result<()>
         .context("devin send_message request")?;
     check(resp).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_status;
+
+    #[test]
+    fn status_mapping() {
+        assert_eq!(
+            map_status("running", Some("waiting_for_user"), true),
+            "finished"
+        );
+        assert_eq!(map_status("running", Some("working"), false), "working");
+        assert_eq!(
+            map_status("running", Some("waiting_for_user"), false),
+            "blocked"
+        );
+        assert_eq!(map_status("suspended", None, false), "blocked");
+        assert_eq!(map_status("exit", None, false), "finished");
+        assert_eq!(map_status("error", None, false), "error");
+        assert_eq!(map_status("new", None, false), "created");
+    }
 }

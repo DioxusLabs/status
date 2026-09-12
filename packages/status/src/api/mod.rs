@@ -540,7 +540,7 @@ pub async fn assess_pr(repo: String, number: i64, force: bool) -> Result<Assessm
         .map_err(Into::into)
 }
 
-#[get("/api/devin/assessment")]
+#[post("/api/devin/assessment")]
 pub async fn get_assessment(repo: String, number: i64) -> Result<Option<AssessmentView>> {
     let pr = db::get_pr(&repo, number).await?;
     match pr {
@@ -551,7 +551,7 @@ pub async fn get_assessment(repo: String, number: i64) -> Result<Option<Assessme
     }
 }
 
-#[get("/api/devin/sessions")]
+#[post("/api/devin/sessions")]
 pub async fn list_sessions(
     repo: Option<String>,
     number: Option<i64>,
