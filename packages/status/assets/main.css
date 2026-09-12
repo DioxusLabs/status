@@ -10,6 +10,33 @@
     --fail: #f85149;
     --warn: #d29922;
     --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* dioxus-components theme tokens mapped to the dashboard palette */
+    --primary-color: var(--dark, #0d1117) var(--light, #0d1117);
+    --primary-color-1: var(--dark, #0d1117) var(--light, #0d1117);
+    --primary-color-2: var(--dark, #0d1117) var(--light, #0d1117);
+    --primary-color-3: var(--dark, #161b22) var(--light, #161b22);
+    --primary-color-4: var(--dark, #1c2230) var(--light, #1c2230);
+    --primary-color-5: var(--dark, #212936) var(--light, #212936);
+    --primary-color-6: var(--dark, #242c38) var(--light, #242c38);
+    --primary-color-7: var(--dark, #2a3140) var(--light, #2a3140);
+    --secondary-color: var(--dark, #e6e9ef) var(--light, #e6e9ef);
+    --secondary-color-1: var(--dark, #e6e9ef) var(--light, #e6e9ef);
+    --secondary-color-2: var(--dark, #d8dee9) var(--light, #d8dee9);
+    --secondary-color-3: var(--dark, #c4cad6) var(--light, #c4cad6);
+    --secondary-color-4: var(--dark, #e6e9ef) var(--light, #e6e9ef);
+    --secondary-color-5: var(--dark, #8b93a3) var(--light, #8b93a3);
+    --secondary-color-6: var(--dark, #667085) var(--light, #667085);
+    --focused-border-color: var(--accent);
+    --primary-success-color: color-mix(in srgb, var(--ok) 20%, var(--bg));
+    --secondary-success-color: var(--ok);
+    --primary-warning-color: color-mix(in srgb, var(--warn) 20%, var(--bg));
+    --secondary-warning-color: var(--warn);
+    --primary-error-color: color-mix(in srgb, var(--fail) 20%, var(--bg));
+    --secondary-error-color: var(--fail);
+    --contrast-error-color: var(--text);
+    --primary-info-color: var(--bg-raised);
+    --secondary-info-color: var(--accent);
 }
 
 * { box-sizing: border-box; }
@@ -148,13 +175,9 @@ a:hover { text-decoration: underline; }
 .filter-bar .dx-dropdown-menu-trigger {
     height: 34px;
     padding: 0 10px;
-    border: 1px solid var(--border);
     border-radius: 6px;
-    background: var(--bg-raised);
-    color: var(--text);
     font: inherit;
     font-size: 13px;
-    box-shadow: none;
 }
 .filter-bar input {
     flex: 1;
@@ -171,20 +194,8 @@ a:hover { text-decoration: underline; }
 .filter-bar button:hover { color: var(--text); border-color: var(--accent); }
 
 .search {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    padding: 7px 10px;
     font-family: var(--mono);
     font-size: 12px;
-}
-.sort {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    padding: 7px 10px;
 }
 
 /* one row in the Columns dropdown */
@@ -201,6 +212,7 @@ a:hover { text-decoration: underline; }
     white-space: nowrap;
 }
 .colrow:hover { background: var(--bg); }
+.filter-bar .columns-menu { right: 0; left: auto; }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .chip {

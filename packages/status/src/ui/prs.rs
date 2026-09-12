@@ -205,6 +205,7 @@ pub fn PullRequests() -> Element {
                     on_open_change: move |v: bool| colmenu_open.set(Some(v)),
                     DropdownMenuTrigger { "Columns ▾" }
                     DropdownMenuContent {
+                        class: "columns-menu",
                         for (id, label) in PR_COLUMNS {
                             ColItem {
                                 key: "{id}",
