@@ -31,8 +31,11 @@ pub fn Repos() -> Element {
                         "prs" => rows.sort_by_key(|r| std::cmp::Reverse(r.open_prs)),
                         "issues" => rows.sort_by_key(|r| std::cmp::Reverse(r.open_issues)),
                         "name" => rows.sort_by(|a, b| a.name.cmp(&b.name)),
-                        _ => rows.sort_by_key(|r| {
-                            std::cmp::Reverse(r.pushed_at.as_deref().unwrap_or(""))
+                        _ => rows.sort_by(|a, b| {
+                            b.pushed_at
+                                .as_deref()
+                                .unwrap_or("")
+                                .cmp(a.pushed_at.as_deref().unwrap_or(""))
                         }),
                     }
                     rsx! {
