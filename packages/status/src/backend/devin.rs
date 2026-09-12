@@ -56,11 +56,12 @@ pub struct PullRequest {
     pub pr_url: String,
 }
 
-/// Map Devin's v3 status + status_detail to our status column. A populated
-/// result (structured output or a PR) counts as finished for any status —
+/// Map Devin's v3 status + status_detail to our status column. Structured
+/// output on a session that is no longer actively working counts as finished —
 /// `structured_output_required` sessions stop at waiting_for_user when done.
 pub fn map_status(status: &str, detail: Option<&str>, has_result: bool) -> String {
     match (status, detail) {
+        (_, Some("working")) if has_result => "working",
         _ if has_result => "finished",
         ("exit", _) | (_, Some("finished")) => "finished",
         ("error", _) | (_, Some("error")) => "error",
@@ -154,6 +155,7 @@ mod tests {
             "finished"
         );
         assert_eq!(map_status("running", Some("working"), false), "working");
+        assert_eq!(map_status("running", Some("working"), true), "working");
         assert_eq!(
             map_status("running", Some("waiting_for_user"), false),
             "blocked"

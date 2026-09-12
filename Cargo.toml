@@ -33,6 +33,12 @@ incremental = false
 [profile.dev]
 debug = 0
 
+[profile.server-dev]
+inherits = "dev"
+
+[profile.wasm-dev]
+inherits = "dev"
+
 [profile.dev.build-override]
 opt-level = 3
 codegen-units = 1

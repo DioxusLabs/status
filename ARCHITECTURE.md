@@ -26,6 +26,12 @@ migrations/                     sqlx sql migrations
 Dockerfile, fly.toml
 ```
 
+Build notes: `dx` uses `--profile server-dev` (host, `--target x86_64-unknown-linux-gnu`) and
+`--profile wasm-dev` (wasm32); both are declared in the workspace `Cargo.toml` (inherit `dev`) so
+plain cargo shares dx's artifact dirs — see README "Development" for the canonical check/clippy/test
+commands. `cargo test` is the exception: the `dioxus-ssr` dev-dep changes feature resolution, so it
+builds its own dep tree once per profile dir.
+
 Env vars: `GITHUB_TOKEN` (fallback), `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`,
 `GITHUB_APP_INSTALLATION_ID` (optional; discovered via `/app/installations`), `DEVIN_API_KEY`, `DEVIN_ORG_ID`,
 `DEVIN_API_BASE` (default https://api.devin.ai; calls go to `{base}/v3/organizations/{org}/sessions`), `ANTHROPIC_API_KEY`,

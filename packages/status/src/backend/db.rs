@@ -822,6 +822,11 @@ fn budget_check(used: i64, total: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fail fast when today's LLM budget is exhausted.
+pub async fn budget_check_now() -> anyhow::Result<()> {
+    budget_check(budget_used_today().await?, budget_limit().await?)
+}
+
 /// Consume one unit of today's LLM budget. Errors when the day is at the limit.
 pub async fn budget_consume() -> anyhow::Result<()> {
     budget_check(budget_used_today().await?, budget_limit().await?)?;
