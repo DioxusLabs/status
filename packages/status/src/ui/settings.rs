@@ -11,6 +11,7 @@ pub fn Settings() -> Element {
     let mut refresh = use_signal(|| 0u32);
     let mut monitored = use_signal(HashSet::<String>::new);
     let mut crates_text = use_signal(String::new);
+    let mut budget_text = use_signal(String::new);
     let mut notice = use_signal(|| Option::<String>::None);
 
     let settings = use_resource(move || async move {
@@ -32,6 +33,9 @@ pub fn Settings() -> Element {
             }
             if crates_text().is_empty() {
                 crates_text.set(s.crates.join("\n"));
+            }
+            if budget_text().is_empty() {
+                budget_text.set(s.devin_budget_total.to_string());
             }
         }
     });
@@ -151,6 +155,33 @@ pub fn Settings() -> Element {
                             });
                         },
                         "Save crates"
+                    }
+                }
+                div { class: "card",
+                    h3 { "Devin" }
+                    p { class: "mono",
+                        "configured: {s.devin_configured} · budget today: {s.devin_budget_used}/{s.devin_budget_total}"
+                    }
+                    input {
+                        class: "search",
+                        r#type: "number",
+                        placeholder: "daily budget",
+                        value: "{budget_text}",
+                        oninput: move |e| budget_text.set(e.value()),
+                    }
+                    button {
+                        class: "chip",
+                        onclick: move |_| {
+                            let v = budget_text().parse::<i64>().unwrap_or(s.devin_budget_total);
+                            spawn(async move {
+                                match api::set_llm_budget(v).await {
+                                    Ok(()) => notice.set(Some(format!("budget set to {v}"))),
+                                    Err(e) => notice.set(Some(format!("save failed: {e}"))),
+                                }
+                                *refresh.write() += 1;
+                            });
+                        },
+                        "Save budget"
                     }
                 }
                 div { class: "card",

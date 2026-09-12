@@ -36,6 +36,7 @@ pub fn Overview() -> Element {
                 }
             }
             div { class: "grid two",
+                DevinActivity {}
                 PrSummaryList { title: "Ready to merge", items: o.ready_to_merge.clone(), empty: "nothing ready" }
                 PrSummaryList { title: "Waiting on maintainer", items: o.waiting_on_maintainer.clone(), empty: "nothing waiting" }
                 PrSummaryList { title: "Quick wins", items: o.quick_wins.clone(), empty: "no quick wins" }
@@ -43,6 +44,30 @@ pub fn Overview() -> Element {
                 PrSummaryList { title: "New this week", items: o.new_this_week.clone(), empty: "nothing new" }
                 PrSummaryList { title: "First-time contributors", items: o.first_time_contributors.clone(), empty: "none this week" }
             }
+        }
+    }
+}
+
+#[component]
+fn DevinActivity() -> Element {
+    let sessions = use_resource(|| async move { api::list_sessions(None, None, 500).await });
+    let Some(Ok(rows)) = sessions() else {
+        return rsx! {};
+    };
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today_n = rows
+        .iter()
+        .filter(|s| s.created_at.starts_with(&today))
+        .count();
+    let working = rows.iter().filter(|s| s.status == "working").count();
+    let blocked = rows.iter().filter(|s| s.status == "blocked").count();
+    rsx! {
+        div { class: "card",
+            h3 {
+                "Devin activity "
+                a { class: "muted small", href: "/bots", "→ /bots" }
+            }
+            p { class: "mono", "{today_n} today · {working} working · {blocked} blocked" }
         }
     }
 }

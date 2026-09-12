@@ -1,3 +1,4 @@
+mod bots;
 mod health;
 mod issues;
 mod layout;
@@ -8,6 +9,7 @@ mod repos;
 mod settings;
 mod widgets;
 
+pub use bots::Bots;
 use dioxus::prelude::*;
 pub use health::Health;
 pub use issues::Issues;
@@ -29,9 +31,4 @@ pub async fn sleep_ms(ms: u64) {
 #[component]
 pub fn Releases() -> Element {
     rsx! { div { class: "page", h1 { "Releases" }, p { class: "muted", "Coming in Phase 1b." } } }
-}
-
-#[component]
-pub fn Bots() -> Element {
-    rsx! { div { class: "page", h1 { "Bots" }, p { class: "muted", "Coming in Phase 1b." } } }
 }

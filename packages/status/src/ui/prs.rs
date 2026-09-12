@@ -297,6 +297,10 @@ fn PrRowEl(
                                         }
                                     }
                                 }
+                                super::bots::DevinPanel {
+                                    repo: d.pr.repo.clone(),
+                                    number: d.pr.number,
+                                }
                             }
                         },
                         _ => rsx! { div { class: "muted", "loading…" } },

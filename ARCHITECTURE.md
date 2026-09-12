@@ -26,7 +26,10 @@ migrations/                     sqlx sql migrations
 Dockerfile, fly.toml
 ```
 
-Env vars: `GITHUB_TOKEN`, `DEVIN_API_KEY`, `DEVIN_API_BASE` (default https://api.devin.ai/v1), `ANTHROPIC_API_KEY`,
+Env vars: `GITHUB_TOKEN` (fallback), `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`,
+`GITHUB_APP_INSTALLATION_ID` (optional; discovered via `/app/installations`), `DEVIN_API_KEY`, `DEVIN_ORG_ID`,
+`DEVIN_API_BASE` (default https://api.devin.ai; calls go to `{base}/v3/organizations/{org}/sessions`), `ANTHROPIC_API_KEY`,
+`LLM_DAILY_BUDGET` (default 50; overridable via `settings.llm_daily_budget`),
 `ADMIN_TOKEN` (shared secret for mutation auth in v1), `DATA_DIR` (default `./_data`), `PORT`.
 
 Auth model: all pages public. Mutations (settings changes, dispatch Devin, assess with LLM, roadmap admin) require an

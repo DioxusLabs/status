@@ -268,3 +268,10 @@ textarea.crates {
     padding: 8px;
     margin-bottom: 8px;
 }
+
+.devin-panel { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+.devin-panel h4 { margin: 4px 0 8px; }
+.devin-session { padding: 2px 0; font-size: 13px; }
+.card.assessment { margin: 8px 0; }
+.card.assessment ul { margin: 4px 0; padding-left: 20px; }
+.card.assessment li { font-size: 13px; }
