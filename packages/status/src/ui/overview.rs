@@ -26,7 +26,7 @@ pub fn Overview() -> Element {
                 Stat { label: "Open PRs", value: "{o.open_prs}" }
                 Stat { label: "Open issues", value: "{o.open_issues}" }
                 Stat { label: "Stars (monitored)", value: format_compact(o.total_stars),
-                    delta: o.stars_7d_delta.map(|d| format!("{}7d", if d >= 0 { format!("+{d}") } else { d.to_string() })) }
+                    delta: o.stars_7d_delta.map(|d| format!("{d:+} in 7d")) }
                 Stat { label: "Downloads (7d)", value: format_compact(o.downloads_7d) }
                 Stat { label: "Monitored repos", value: "{o.monitored_repos}" }
             }

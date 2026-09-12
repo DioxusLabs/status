@@ -101,6 +101,13 @@ async fn sync_prs_issues() -> anyhow::Result<String> {
                 db::log_sync("prs", repo, &now(), false, &format!("{e:#}")).await?;
             }
         }
+        match github::sync_closed_prs(repo).await {
+            Ok(n) if n > 0 => {
+                db::log_sync("prs", repo, &now(), true, &format!("{n} closed/merged prs")).await?
+            }
+            Ok(_) => {}
+            Err(e) => warn!("sync closed prs {repo}: {e:#}"),
+        }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         match github::sync_open_issues(repo, &members).await {
             Ok(n) => {
@@ -110,6 +117,13 @@ async fn sync_prs_issues() -> anyhow::Result<String> {
                 warn!("sync issues {repo}: {e:#}");
                 db::log_sync("issues", repo, &now(), false, &format!("{e:#}")).await?;
             }
+        }
+        match github::sync_closed_issues(repo).await {
+            Ok(n) if n > 0 => {
+                db::log_sync("issues", repo, &now(), true, &format!("{n} closed issues")).await?
+            }
+            Ok(_) => {}
+            Err(e) => warn!("sync closed issues {repo}: {e:#}"),
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }

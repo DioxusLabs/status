@@ -5,6 +5,18 @@ use crate::api;
 
 #[component]
 pub fn RepoDetail(name: String) -> Element {
+    rsx! {
+        div { class: "page",
+            SuspenseBoundary {
+                fallback: |_| rsx! { p { class: "muted", "loading…" } },
+                RepoDetailBody { name: name }
+            }
+        }
+    }
+}
+
+#[component]
+fn RepoDetailBody(name: String) -> Element {
     let mut tab = use_signal(|| "overview".to_string());
     let detail = use_resource({
         let name = name.clone();
@@ -13,11 +25,9 @@ pub fn RepoDetail(name: String) -> Element {
             async move { api::get_repo(name).await }
         }
     });
-
-    rsx! {
-        div { class: "page",
-            match detail() {
-                Some(Ok(d)) => rsx! {
+    let detail = detail.suspend()?;
+    let out = match &*detail.read() {
+        Ok(d) => rsx! {
                     h1 { "{d.repo.name}" }
                     p { class: "muted", "{d.repo.description}" }
                     div { class: "health-strip",
@@ -120,10 +130,8 @@ pub fn RepoDetail(name: String) -> Element {
                             }
                         },
                     }
-                },
-                Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
-                None => rsx! { p { class: "muted", "loading…" } },
-            }
-        }
-    }
+        },
+        Err(e) => rsx! { p { class: "muted", "error: {e}" } },
+    };
+    out
 }

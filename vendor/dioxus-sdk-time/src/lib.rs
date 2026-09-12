@@ -3,10 +3,10 @@ use std::time::Duration;
 use dioxus::{
     core::Task,
     dioxus_core::SpawnIfAsync,
-    prelude::{Callback, spawn, use_hook},
+    prelude::{spawn, use_hook, Callback},
     signals::Signal,
 };
-use futures::{SinkExt, StreamExt, channel::mpsc};
+use futures::{channel::mpsc, SinkExt, StreamExt};
 
 pub async fn sleep(duration: Duration) {
     #[cfg(not(target_family = "wasm"))]

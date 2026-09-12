@@ -9,14 +9,15 @@ pub fn Issues() -> Element {
     let mut committed = use_signal(String::new);
     let mut sort = use_signal(|| "updated".to_string());
 
-    let mut revision = use_signal(|| 0u32);
+    let pending = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(0u32)));
     use_effect(move || {
         let q = query();
-        let rev = revision() + 1;
-        *revision.write() = rev;
+        let rev = pending.get() + 1;
+        pending.set(rev);
+        let pending = pending.clone();
         spawn(async move {
             super::sleep_ms(300).await;
-            if revision() == rev {
+            if pending.get() == rev {
                 committed.set(q);
             }
         });

@@ -397,6 +397,180 @@ pub async fn sync_open_prs(repo: &str, members: &HashSet<String>) -> anyhow::Res
     Ok(seen.len())
 }
 
+const CLOSED_PRS_QUERY: &str = r#"
+query($org: String!, $repo: String!, $cursor: String) {
+  rateLimit { remaining }
+  repository(owner: $org, name: $repo) {
+    pullRequests(states: [MERGED, CLOSED], first: 50, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        databaseId
+        number
+        title
+        url
+        state
+        isDraft
+        author { login }
+        authorAssociation
+        createdAt
+        updatedAt
+        mergedAt
+        closedAt
+        additions
+        deletions
+        changedFiles
+      }
+    }
+  }
+}"#;
+
+/// Fetch PRs closed/merged within the last 30 days. Uses a direct
+/// `pullRequests(states: [MERGED, CLOSED])` connection ordered by updatedAt and
+/// stops paging at the cutoff — cheaper than `search()` since it needs no
+/// search quota and fetches exactly the fields we store.
+pub async fn sync_closed_prs(repo: &str) -> anyhow::Result<usize> {
+    let org = super::env::org();
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+    let mut cursor: Option<String> = None;
+    let mut count = 0;
+    'pages: loop {
+        let data = graphql(
+            CLOSED_PRS_QUERY,
+            json!({ "org": org, "repo": repo, "cursor": cursor }),
+        )
+        .await?;
+        let page = &data["repository"]["pullRequests"];
+        for n in page["nodes"].as_array().cloned().unwrap_or_default() {
+            let updated = n["updatedAt"]
+                .as_str()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
+            if updated.is_some_and(|t| t.with_timezone(&chrono::Utc) < cutoff) {
+                break 'pages;
+            }
+            let state = n["state"].as_str().unwrap_or("").to_lowercase();
+            let pr = DbPr {
+                id: n["databaseId"].as_i64().unwrap_or(0),
+                repo: repo.to_string(),
+                number: n["number"].as_i64().unwrap_or(0),
+                title: n["title"].as_str().map(String::from),
+                body: None,
+                author: n["author"]["login"].as_str().map(String::from),
+                author_association: n["authorAssociation"].as_str().map(String::from),
+                url: n["url"].as_str().map(String::from),
+                state: Some(state),
+                is_draft: n["isDraft"].as_bool().unwrap_or(false),
+                created_at: n["createdAt"].as_str().map(String::from),
+                updated_at: n["updatedAt"].as_str().map(String::from),
+                merged_at: n["mergedAt"].as_str().map(String::from),
+                closed_at: n["closedAt"].as_str().map(String::from),
+                head_sha: None,
+                base_ref: None,
+                additions: n["additions"].as_i64().unwrap_or(0),
+                deletions: n["deletions"].as_i64().unwrap_or(0),
+                changed_files: n["changedFiles"].as_i64().unwrap_or(0),
+                mergeable: None,
+                review_decision: None,
+                ci_state: "none".into(),
+                labels_json: "[]".into(),
+                reviewers_json: "[]".into(),
+                unresolved_threads: 0,
+                comments: 0,
+                last_activity_at: n["updatedAt"].as_str().map(String::from),
+                last_activity_by: None,
+                linked_issues_json: "[]".into(),
+                files_json: "[]".into(),
+                score: 0,
+                score_breakdown_json: "[]".into(),
+                synced_at: Some(chrono::Utc::now().to_rfc3339()),
+            };
+            db::upsert_pr(&pr).await?;
+            count += 1;
+        }
+        if page["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
+            cursor = page["pageInfo"]["endCursor"].as_str().map(String::from);
+        } else {
+            break;
+        }
+    }
+    Ok(count)
+}
+
+const CLOSED_ISSUES_QUERY: &str = r#"
+query($org: String!, $repo: String!, $cursor: String) {
+  rateLimit { remaining }
+  repository(owner: $org, name: $repo) {
+    issues(states: CLOSED, first: 50, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        databaseId
+        number
+        title
+        url
+        state
+        author { login }
+        authorAssociation
+        createdAt
+        updatedAt
+        closedAt
+        comments { totalCount }
+        reactions { totalCount }
+      }
+    }
+  }
+}"#;
+
+pub async fn sync_closed_issues(repo: &str) -> anyhow::Result<usize> {
+    let org = super::env::org();
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+    let mut cursor: Option<String> = None;
+    let mut count = 0;
+    'pages: loop {
+        let data = graphql(
+            CLOSED_ISSUES_QUERY,
+            json!({ "org": org, "repo": repo, "cursor": cursor }),
+        )
+        .await?;
+        let page = &data["repository"]["issues"];
+        for n in page["nodes"].as_array().cloned().unwrap_or_default() {
+            let updated = n["updatedAt"]
+                .as_str()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
+            if updated.is_some_and(|t| t.with_timezone(&chrono::Utc) < cutoff) {
+                break 'pages;
+            }
+            db::upsert_issue(&DbIssue {
+                id: n["databaseId"].as_i64().unwrap_or(0),
+                repo: repo.to_string(),
+                number: n["number"].as_i64().unwrap_or(0),
+                title: n["title"].as_str().map(String::from),
+                body: None,
+                author: n["author"]["login"].as_str().map(String::from),
+                author_association: n["authorAssociation"].as_str().map(String::from),
+                url: n["url"].as_str().map(String::from),
+                state: Some(n["state"].as_str().unwrap_or("closed").to_lowercase()),
+                created_at: n["createdAt"].as_str().map(String::from),
+                updated_at: n["updatedAt"].as_str().map(String::from),
+                closed_at: n["closedAt"].as_str().map(String::from),
+                labels_json: "[]".into(),
+                comments: n["comments"]["totalCount"].as_i64().unwrap_or(0),
+                reactions: n["reactions"]["totalCount"].as_i64().unwrap_or(0),
+                assignees_json: "[]".into(),
+                last_activity_at: n["updatedAt"].as_str().map(String::from),
+                last_activity_by: None,
+                synced_at: Some(chrono::Utc::now().to_rfc3339()),
+            })
+            .await?;
+            count += 1;
+        }
+        if page["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
+            cursor = page["pageInfo"]["endCursor"].as_str().map(String::from);
+        } else {
+            break;
+        }
+    }
+    Ok(count)
+}
+
 const ISSUES_QUERY: &str = r#"
 query($org: String!, $repo: String!, $cursor: String) {
   rateLimit { remaining }

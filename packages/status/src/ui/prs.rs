@@ -16,14 +16,15 @@ pub fn PullRequests() -> Element {
     let repos = use_resource(|| async move { api::list_repos().await.unwrap_or_default() });
 
     // Debounce the free-text query and reflect filters in the URL.
-    let mut revision = use_signal(|| 0u32);
+    let pending = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(0u32)));
     use_effect(move || {
         let q = query();
-        let rev = revision() + 1;
-        *revision.write() = rev;
+        let rev = pending.get() + 1;
+        pending.set(rev);
+        let pending = pending.clone();
         spawn(async move {
             super::sleep_ms(300).await;
-            if revision() == rev {
+            if pending.get() == rev {
                 committed.set(q.clone());
                 #[cfg(feature = "web")]
                 {
@@ -57,17 +58,7 @@ pub fn PullRequests() -> Element {
         });
     });
 
-    let prs = use_resource(move || async move {
-        let filter = PrFilter {
-            repos: repos_sel(),
-            query: committed(),
-            state: Some("open".into()),
-            sort: sort(),
-            limit: 200,
-            ..Default::default()
-        };
-        api::list_prs(filter).await
-    });
+    // (resource lives in PrsTable so it can suspend under the SuspenseBoundary)
 
     let mut apply_chip = move |chip: &str| {
         let q = match chip {
@@ -158,40 +149,72 @@ pub fn PullRequests() -> Element {
                     }
                 }
             }
-            match prs() {
-                Some(Ok(rows)) => rsx! {
-                    table { class: "data",
-                        thead {
-                            tr {
-                                th { "score" }
-                                th { "repo" }
-                                th { "#" }
-                                th { "title" }
-                                th { "author" }
-                                th { "ci" }
-                                th { "review" }
-                                th { "size" }
-                                th { "age" }
-                                th { "last by" }
-                            }
-                        }
-                        tbody {
-                            for p in rows {
-                                PrRowEl {
-                                    key: "{p.id}",
-                                    pr: p,
-                                    expanded: expanded,
-                                    detail: detail,
-                                }
-                            }
-                        }
-                    }
-                },
-                Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
-                None => rsx! { p { class: "muted", "loading…" } },
+            SuspenseBoundary {
+                fallback: |_| rsx! { p { class: "muted", "loading…" } },
+                PrsTable {
+                    committed: committed,
+                    repos_sel: repos_sel,
+                    sort: sort,
+                    expanded: expanded,
+                    detail: detail,
+                }
             }
         }
     }
+}
+
+#[component]
+fn PrsTable(
+    committed: Signal<String>,
+    repos_sel: Signal<Vec<String>>,
+    sort: Signal<PrSort>,
+    expanded: Signal<Option<(String, i64)>>,
+    detail: Signal<Option<crate::model::PrDetail>>,
+) -> Element {
+    let prs = use_resource(move || async move {
+        let filter = PrFilter {
+            repos: repos_sel(),
+            query: committed(),
+            state: Some("open".into()),
+            sort: sort(),
+            limit: 200,
+            ..Default::default()
+        };
+        api::list_prs(filter).await
+    });
+    let prs = prs.suspend()?;
+    let out = match &*prs.read() {
+        Ok(rows) => rsx! {
+            table { class: "data",
+                thead {
+                    tr {
+                        th { "score" }
+                        th { "repo" }
+                        th { "#" }
+                        th { "title" }
+                        th { "author" }
+                        th { "ci" }
+                        th { "review" }
+                        th { "size" }
+                        th { "age" }
+                        th { "last by" }
+                    }
+                }
+                tbody {
+                    for p in rows {
+                        PrRowEl {
+                            key: "{p.id}",
+                            pr: p.clone(),
+                            expanded: expanded,
+                            detail: detail,
+                        }
+                    }
+                }
+            }
+        },
+        Err(e) => rsx! { p { class: "muted", "error: {e}" } },
+    };
+    out
 }
 
 #[component]

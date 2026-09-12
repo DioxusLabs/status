@@ -13,6 +13,9 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
+# pin: dx 0.8.0-alpha.1's bundled wasm-bindgen-cli is incompatible with 0.2.128
+# (hydration crashes with "table grow failure"); dioxus repo locks 0.2.121
+wasm-bindgen = "=0.2.121"
 
 # server-only
 tokio = { workspace = true, optional = true }

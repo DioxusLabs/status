@@ -52,13 +52,19 @@ pub async fn get_overview() -> Result<Overview> {
     )
     .fetch_one(pool)
     .await?;
-    o.stars_7d_delta = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT (SELECT COALESCE(SUM(stars),0) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots))
-              - (SELECT COALESCE(SUM(stars),0) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days')))",
+    let has_week_old_snapshot: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'))",
     )
     .fetch_one(pool)
-    .await
-    .unwrap_or(None);
+    .await?;
+    if has_week_old_snapshot {
+        o.stars_7d_delta = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots))
+                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days')))",
+        )
+        .fetch_one(pool)
+        .await?;
+    }
 
     o.ready_to_merge = top_prs(
         "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'
