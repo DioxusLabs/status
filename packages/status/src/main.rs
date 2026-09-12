@@ -75,6 +75,10 @@ async fn run_server() -> anyhow::Result<()> {
 }
 
 fn app() -> Element {
+    #[cfg(feature = "web")]
+    use_effect(|| {
+        document::eval("document.documentElement.setAttribute('data-theme', 'dark')");
+    });
     rsx! {
         document::Stylesheet { href: asset!("/assets/dx-components-theme.css") }
         document::Stylesheet { href: asset!("/assets/main.css") }

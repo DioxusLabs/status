@@ -168,3 +168,13 @@ pub fn PrSummaryList(title: &'static str, items: Vec<PrSummary>, empty: &'static
         }
     }
 }
+
+pub fn assoc_label(a: &str) -> &'static str {
+    match a {
+        "MEMBER" | "OWNER" => "maintainer",
+        "CONTRIBUTOR" => "contributor",
+        "FIRST_TIME_CONTRIBUTOR" | "FIRST_TIMER" => "first-timer",
+        "BOT" => "bot",
+        _ => "",
+    }
+}

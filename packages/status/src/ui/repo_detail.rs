@@ -67,7 +67,13 @@ fn RepoDetailBody(name: String) -> Element {
                                             td { class: "title",
                                                 a { href: "{p.url}", target: "_blank", "{p.title}" }
                                             }
-                                            td { "{p.author}" }
+                                            td {
+                                                span {
+                                                    class: "author {super::widgets::assoc_label(&p.author_association)}",
+                                                    title: "{super::widgets::assoc_label(&p.author_association)}",
+                                                    "{p.author}"
+                                                }
+                                            }
                                             td { CiDot { state: p.ci_state.clone() } }
                                         }
                                     }
@@ -83,7 +89,13 @@ fn RepoDetailBody(name: String) -> Element {
                                             td { class: "title",
                                                 a { href: "{i.url}", target: "_blank", "{i.title}" }
                                             }
-                                            td { "{i.author}" }
+                                            td {
+                                                span {
+                                                    class: "author {super::widgets::assoc_label(&i.author_association)}",
+                                                    title: "{super::widgets::assoc_label(&i.author_association)}",
+                                                    "{i.author}"
+                                                }
+                                            }
                                             td { class: "mono", "{i.comments}" }
                                         }
                                     }

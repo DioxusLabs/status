@@ -99,7 +99,13 @@ fn IssueRowEl(issue: IssueRow) -> Element {
                     span { class: "label", "{l}" }
                 }
             }
-            td { "{issue.author}" }
+            td {
+                span {
+                    class: "author {super::widgets::assoc_label(&issue.author_association)}",
+                    title: "{super::widgets::assoc_label(&issue.author_association)}",
+                    "{issue.author}"
+                }
+            }
             td { class: "mono", "{issue.comments}" }
             td { class: "mono", "{issue.reactions}" }
             td { class: "mono muted", "{updated}" }

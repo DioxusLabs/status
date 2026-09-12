@@ -4,8 +4,11 @@ use dioxus::prelude::*;
 
 use crate::api;
 
+use super::layout::AdminState;
+
 #[component]
 pub fn Settings() -> Element {
+    let mut admin = consume_context::<AdminState>();
     let mut token = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let mut refresh = use_signal(|| 0u32);
@@ -46,6 +49,7 @@ pub fn Settings() -> Element {
             match api::admin_login(token).await {
                 Ok(_) => {
                     error.set(None);
+                    admin.0.set(true);
                     *refresh.write() += 1;
                 }
                 Err(e) => error.set(Some(e.to_string())),

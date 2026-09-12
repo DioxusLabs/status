@@ -14,6 +14,13 @@
 
 * { box-sizing: border-box; }
 
+html {
+    background: var(--bg);
+    color-scheme: dark;
+    --dark: initial;
+    --light: ;
+}
+
 body {
     margin: 0;
     background: var(--bg);
@@ -24,36 +31,37 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.shell { display: flex; min-height: 100vh; }
-
-.sidebar {
-    width: 180px;
-    flex: 0 0 180px;
-    border-right: 1px solid var(--border);
-    padding: 16px 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+.topnav {
     position: sticky;
     top: 0;
-    height: 100vh;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 48px;
+    padding: 0 24px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
 }
 
 .brand {
     font-weight: 600;
-    padding: 4px 12px 16px;
     font-size: 15px;
+    margin-right: 16px;
 }
+
+.topnav .spacer { flex: 1; }
 
 .nav-item {
-    display: block;
-    padding: 6px 12px;
+    padding: 5px 10px;
     border-radius: 6px;
     color: var(--text-muted);
+    font-size: 13px;
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); text-decoration: none; }
+.nav-item.active { color: var(--text); background: var(--bg-hover); }
 
-.content { flex: 1; padding: 24px 32px; min-width: 0; }
+.content { max-width: 1400px; margin: 0 auto; padding: 20px 24px; }
 .page h1 { margin: 0 0 16px; font-size: 20px; }
 .page h2 { margin: 24px 0 12px; font-size: 16px; }
 .muted { color: var(--text-muted); }
@@ -130,9 +138,29 @@ a:hover { text-decoration: underline; }
 .ok-text { color: var(--ok); }
 .fail-text { color: var(--fail); }
 
-.filter-bar { display: flex; gap: 8px; margin-bottom: 10px; }
-.search {
+.filter-bar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+.filter-bar input,
+.filter-bar select,
+.filter-bar button {
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-raised);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+.filter-bar input {
     flex: 1;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+.filter-bar h1 { margin: 0; font-size: 20px; margin-right: auto; }
+.filter-bar button { cursor: pointer; color: var(--text-muted); }
+.filter-bar button:hover { color: var(--text); border-color: var(--accent); }
+
+.search {
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -161,6 +189,43 @@ a:hover { text-decoration: underline; }
 }
 .chip:hover { color: var(--text); border-color: var(--accent); }
 .chip.active { color: var(--accent); border-color: var(--accent); }
+
+.loading-dot {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: .4; } }
+
+.colmenu-wrap { position: relative; }
+.colmenu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 140px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.colmenu .check { font-size: 12px; }
+.btn-sm {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    padding: 2px 10px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.btn-sm:hover { color: var(--text); border-color: var(--accent); }
+.btn-sm.err { color: var(--fail); }
 
 table.data {
     width: 100%;
@@ -206,6 +271,9 @@ td.title a:hover { color: var(--accent); }
     color: var(--text-muted);
 }
 .badge.assoc { color: var(--accent); }
+.author.maintainer { color: var(--accent); }
+.author.first-timer { color: var(--ok); }
+.author.bot { color: var(--text-muted); font-style: italic; }
 
 .detail-row td { background: var(--bg-raised); cursor: default; }
 .pr-detail .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 8px 0; }
