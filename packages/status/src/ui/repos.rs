@@ -8,17 +8,44 @@ use crate::Route;
 #[component]
 pub fn Repos() -> Element {
     let repos = use_resource(|| async move { api::list_repos().await });
+    let mut sort = use_signal(|| "pushed".to_string());
     rsx! {
         div { class: "page",
-            h1 { "Repos" }
+            div { class: "filter-bar",
+                h1 { "Repos" }
+                select {
+                    class: "sort",
+                    onchange: move |e| sort.set(e.value()),
+                    option { value: "pushed", selected: sort() == "pushed", "Sort: recently pushed" }
+                    option { value: "stars", selected: sort() == "stars", "Sort: stars" }
+                    option { value: "prs", selected: sort() == "prs", "Sort: open PRs" }
+                    option { value: "issues", selected: sort() == "issues", "Sort: open issues" }
+                    option { value: "name", selected: sort() == "name", "Sort: name" }
+                }
+            }
             match repos() {
-                Some(Ok(rows)) => rsx! {
-                    div { class: "grid cards",
-                        for r in rows {
-                            RepoCard { key: "{r.name}", repo: r }
+                Some(Ok(rows)) => {
+                    let mut rows = rows;
+                    match sort().as_str() {
+                        "stars" => rows.sort_by(|a, b| b.stars.cmp(&a.stars)),
+                        "prs" => rows.sort_by(|a, b| b.open_prs.cmp(&a.open_prs)),
+                        "issues" => rows.sort_by(|a, b| b.open_issues.cmp(&a.open_issues)),
+                        "name" => rows.sort_by(|a, b| a.name.cmp(&b.name)),
+                        _ => rows.sort_by(|a, b| {
+                            b.pushed_at
+                                .as_deref()
+                                .unwrap_or("")
+                                .cmp(a.pushed_at.as_deref().unwrap_or(""))
+                        }),
+                    }
+                    rsx! {
+                        div { class: "grid cards",
+                            for r in rows {
+                                RepoCard { key: "{r.name}", repo: r }
+                            }
                         }
                     }
-                },
+                }
                 Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
                 None => rsx! { p { class: "muted", "loading…" } },
             }

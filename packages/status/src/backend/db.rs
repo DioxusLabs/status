@@ -325,7 +325,7 @@ pub async fn upsert_repo(r: &DbRepo) -> anyhow::Result<()> {
 }
 
 pub async fn list_repos() -> anyhow::Result<Vec<RepoRow>> {
-    let rows = sqlx::query_as::<_, DbRepo>("SELECT * FROM repos ORDER BY name")
+    let rows = sqlx::query_as::<_, DbRepo>("SELECT * FROM repos ORDER BY pushed_at DESC")
         .fetch_all(pool())
         .await?;
     Ok(rows.into_iter().map(Into::into).collect())
