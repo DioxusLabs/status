@@ -76,9 +76,8 @@ pub fn LineChart(
     rsx! {
         svg {
             class: "chart",
-            width: "{width}",
-            height: "{height}",
             view_box: "0 0 {width} {height}",
+            style: "width: 100%; max-width: {width}px; height: auto; display: block;",
             for t in ticks.iter() {
                 line {
                     x1: "{pad_l}",
