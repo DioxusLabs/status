@@ -1,11 +1,24 @@
 use std::path::PathBuf;
 
+/// Read `NAME`, falling back to `DIOXUS_STATUS_NAME` (the org-wide secret
+/// naming used in Devin environments). Empty values count as unset.
+fn var(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::env::var(format!("DIOXUS_STATUS_{name}"))
+                .ok()
+                .filter(|v| !v.is_empty())
+        })
+}
+
 pub fn github_token() -> Option<String> {
-    std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty())
+    var("GITHUB_TOKEN")
 }
 
 pub fn admin_token() -> Option<String> {
-    std::env::var("ADMIN_TOKEN").ok().filter(|t| !t.is_empty())
+    var("ADMIN_TOKEN")
 }
 
 pub fn data_dir() -> PathBuf {
@@ -23,23 +36,16 @@ pub fn org() -> String {
 }
 
 pub fn github_app_id() -> Option<u64> {
-    std::env::var("GITHUB_APP_ID")
-        .ok()
-        .and_then(|v| v.parse().ok())
+    var("GITHUB_APP_ID").and_then(|v| v.trim().parse().ok())
 }
 
 /// PEM contents from GITHUB_APP_PRIVATE_KEY or the file at
 /// GITHUB_APP_PRIVATE_KEY_PATH; literal `\n` escapes are normalized.
 pub fn github_app_private_key() -> Option<Vec<u8>> {
-    if let Ok(pem) = std::env::var("GITHUB_APP_PRIVATE_KEY") {
-        if !pem.is_empty() {
-            return Some(normalize_pem(&pem).into_bytes());
-        }
+    if let Some(pem) = var("GITHUB_APP_PRIVATE_KEY") {
+        return Some(normalize_pem(&pem).into_bytes());
     }
-    let path = std::env::var("GITHUB_APP_PRIVATE_KEY_PATH").ok()?;
-    if path.is_empty() {
-        return None;
-    }
+    let path = var("GITHUB_APP_PRIVATE_KEY_PATH")?;
     std::fs::read(&path)
         .ok()
         .map(|b| normalize_pem(String::from_utf8_lossy(&b).as_ref()).into_bytes())
@@ -50,24 +56,20 @@ pub fn normalize_pem(pem: &str) -> String {
 }
 
 pub fn github_app_installation_id() -> Option<u64> {
-    std::env::var("GITHUB_APP_INSTALLATION_ID")
-        .ok()
-        .and_then(|v| v.parse().ok())
+    var("GITHUB_APP_INSTALLATION_ID").and_then(|v| v.trim().parse().ok())
 }
 
 pub fn devin_api_key() -> Option<String> {
-    std::env::var("DEVIN_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
+    var("DEVIN_API_KEY")
 }
 
 pub fn devin_api_base() -> String {
-    let b = std::env::var("DEVIN_API_BASE").unwrap_or_else(|_| "https://api.devin.ai".into());
+    let b = var("DEVIN_API_BASE").unwrap_or_else(|| "https://api.devin.ai".into());
     b.trim_end_matches('/').to_string()
 }
 
 pub fn devin_org_id() -> Option<String> {
-    std::env::var("DEVIN_ORG_ID").ok().filter(|v| !v.is_empty())
+    var("DEVIN_ORG_ID")
 }
 
 pub fn llm_daily_budget() -> i64 {
