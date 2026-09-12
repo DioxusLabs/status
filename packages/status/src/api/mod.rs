@@ -28,75 +28,95 @@ fn pr_summary(p: &db::DbPr) -> PrSummary {
     }
 }
 
-#[get("/api/overview")]
-pub async fn get_overview() -> Result<Overview> {
+#[post("/api/overview")]
+pub async fn get_overview(repos: Vec<String>) -> Result<Overview> {
     let mut o = Overview::default();
     let pool = db::pool();
+    let (name_clause, _) = repo_clause("name", &repos);
+    let (repo_clause, repo_binds) = repo_clause("repo", &repos);
 
     o.monitored_repos = sqlx::query_scalar("SELECT COUNT(*) FROM repos WHERE monitored = 1")
         .fetch_one(pool)
         .await?;
-    o.open_prs = sqlx::query_scalar("SELECT COUNT(*) FROM pull_requests WHERE state = 'open'")
-        .fetch_one(pool)
-        .await?;
-    o.open_issues = sqlx::query_scalar("SELECT COUNT(*) FROM issues WHERE state = 'open'")
-        .fetch_one(pool)
-        .await?;
-    o.total_stars =
-        sqlx::query_scalar("SELECT COALESCE(SUM(stars),0) FROM repos WHERE monitored = 1")
-            .fetch_one(pool)
-            .await?;
-    o.downloads_7d = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(downloads),0) FROM crate_downloads_daily
-         WHERE date >= date('now', '-7 days')",
-    )
-    .fetch_one(pool)
-    .await?;
-    let has_week_old_snapshot: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'))",
-    )
-    .fetch_one(pool)
-    .await?;
+    let sql = format!("SELECT COUNT(*) FROM pull_requests WHERE state = 'open'{repo_clause}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for bind in &repo_binds {
+        q = q.bind(bind);
+    }
+    o.open_prs = q.fetch_one(pool).await?;
+    let sql = format!("SELECT COUNT(*) FROM issues WHERE state = 'open'{repo_clause}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for bind in &repo_binds {
+        q = q.bind(bind);
+    }
+    o.open_issues = q.fetch_one(pool).await?;
+    let sql = format!("SELECT COALESCE(SUM(stars),0) FROM repos WHERE monitored = 1{name_clause}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for bind in &repo_binds {
+        q = q.bind(bind);
+    }
+    o.total_stars = q.fetch_one(pool).await?;
+    let sql = format!(
+        "SELECT COALESCE(SUM(d.downloads),0) FROM crate_downloads_daily d
+         JOIN crates c ON c.name = d.crate_name
+         WHERE d.date >= date('now', '-7 days'){repo_clause}"
+    );
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for bind in &repo_binds {
+        q = q.bind(bind);
+    }
+    o.downloads_7d = q.fetch_one(pool).await?;
+    let sql = format!("SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause})");
+    let mut q = sqlx::query_scalar::<_, bool>(&sql);
+    for bind in &repo_binds {
+        q = q.bind(bind);
+    }
+    let has_week_old_snapshot = q.fetch_one(pool).await?;
     if has_week_old_snapshot {
-        o.stars_7d_delta = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots))
-                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days')))",
-        )
-        .fetch_one(pool)
-        .await?;
+        let sql = format!("SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE 1=1{repo_clause}){repo_clause})
+                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause}){repo_clause})");
+        let mut q = sqlx::query_scalar::<_, Option<i64>>(&sql);
+        for _ in 0..4 {
+            for bind in &repo_binds {
+                q = q.bind(bind);
+            }
+        }
+        o.stars_7d_delta = q.fetch_one(pool).await?;
     }
 
     o.ready_to_merge = top_prs(
-        "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'
+        format!("SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'{repo_clause}
          AND review_decision='APPROVED' AND mergeable='MERGEABLE' AND score >= 60
-         ORDER BY score DESC LIMIT 10",
-    )
-    .await?;
+         ORDER BY score DESC LIMIT 10"), repo_binds.clone(),
+    ).await?;
     o.quick_wins = top_prs(
-        "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'
-         AND (additions + deletions) <= 50 ORDER BY score DESC LIMIT 10",
-    )
-    .await?;
+        format!("SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'{repo_clause}
+         AND (additions + deletions) <= 50 ORDER BY score DESC LIMIT 10"), repo_binds.clone(),
+    ).await?;
     o.going_stale = top_prs(
-        "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0
+        format!(
+            "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0{repo_clause}
          AND last_activity_by = 'contributor' AND author_association NOT IN ('MEMBER','OWNER')
-         AND last_activity_at < datetime('now', '-14 days') ORDER BY last_activity_at ASC LIMIT 10",
+         AND last_activity_at < datetime('now', '-14 days') ORDER BY last_activity_at ASC LIMIT 10"
+        ),
+        repo_binds.clone(),
     )
     .await?;
     o.waiting_on_maintainer = top_prs(
-        "SELECT * FROM pull_requests WHERE state='open' AND last_activity_by = 'contributor'
-         ORDER BY last_activity_at ASC LIMIT 10",
-    )
-    .await?;
+        format!("SELECT * FROM pull_requests WHERE state='open' AND last_activity_by = 'contributor'{repo_clause}
+         ORDER BY last_activity_at ASC LIMIT 10"), repo_binds.clone(),
+    ).await?;
     o.new_this_week = top_prs(
-        "SELECT * FROM pull_requests WHERE state='open' AND created_at > datetime('now', '-7 days')
-         ORDER BY created_at DESC LIMIT 10",
-    )
-    .await?;
+        format!("SELECT * FROM pull_requests WHERE state='open' AND created_at > datetime('now', '-7 days'){repo_clause}
+         ORDER BY created_at DESC LIMIT 10"), repo_binds.clone(),
+    ).await?;
     o.first_time_contributors = top_prs(
-        "SELECT * FROM pull_requests WHERE state='open'
+        format!(
+            "SELECT * FROM pull_requests WHERE state='open'{repo_clause}
          AND author_association IN ('FIRST_TIME_CONTRIBUTOR','FIRST_TIMER')
-         ORDER BY created_at DESC LIMIT 10",
+         ORDER BY created_at DESC LIMIT 10"
+        ),
+        repo_binds,
     )
     .await?;
     o.last_sync = db::last_sync().await?;
@@ -104,10 +124,23 @@ pub async fn get_overview() -> Result<Overview> {
 }
 
 #[cfg(feature = "server")]
-async fn top_prs(sql: &'static str) -> anyhow::Result<Vec<PrSummary>> {
-    let rows = sqlx::query_as::<_, db::DbPr>(sql)
-        .fetch_all(db::pool())
-        .await?;
+fn repo_clause(column: &str, repos: &[String]) -> (String, Vec<String>) {
+    if repos.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    let placeholders = std::iter::repeat_n("?", repos.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    (format!(" AND {column} IN ({placeholders})"), repos.to_vec())
+}
+
+#[cfg(feature = "server")]
+async fn top_prs(sql: String, binds: Vec<String>) -> anyhow::Result<Vec<PrSummary>> {
+    let mut query = sqlx::query_as::<_, db::DbPr>(&sql);
+    for bind in binds {
+        query = query.bind(bind);
+    }
+    let rows = query.fetch_all(db::pool()).await?;
     Ok(rows.iter().map(pr_summary).take(10).collect())
 }
 

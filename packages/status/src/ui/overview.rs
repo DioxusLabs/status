@@ -3,22 +3,122 @@ use dioxus::prelude::*;
 use super::cache::use_cached;
 use super::widgets::{format_compact, PrSummaryList};
 use crate::api;
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::checkbox::Checkbox;
+use crate::components::dropdown_menu::{DropdownMenu, DropdownMenuContent, DropdownMenuTrigger};
+use dioxus_primitives::checkbox::CheckboxState;
 
 #[component]
 pub fn Overview() -> Element {
+    let mut selected = use_signal(Vec::<String>::new);
+    let mut menu_open = use_signal(|| Some(false));
+    #[cfg(feature = "web")]
+    let mut repos_loaded = use_signal(|| false);
+    let repos = use_cached(|| "repos".to_string(), || async { api::list_repos().await })?;
+
+    #[cfg(feature = "web")]
+    {
+        use_hook(move || {
+            spawn(async move {
+                if let Ok(v) = document::eval("return localStorage.getItem('overview.repos') ?? ''")
+                    .await
+                    .map_err(|e| e.to_string())
+                    .map(|v| v.as_str().unwrap_or_default().to_string())
+                {
+                    if let Some(saved) = (!v.is_empty())
+                        .then(|| serde_json::from_str::<Vec<String>>(&v).ok())
+                        .flatten()
+                    {
+                        selected.set(saved);
+                    }
+                }
+                repos_loaded.set(true);
+            });
+        });
+        use_effect(move || {
+            let repos = selected();
+            if !repos_loaded() {
+                return;
+            }
+            document::eval(&format!(
+                "localStorage.setItem('overview.repos', '{}')",
+                serde_json::to_string(&repos).unwrap_or_default()
+            ));
+        });
+    }
+
     let overview = use_cached(
-        || "overview".to_string(),
-        || async { api::get_overview().await },
+        move || {
+            format!(
+                "overview:{}",
+                serde_json::to_string(&selected()).unwrap_or_default()
+            )
+        },
+        move || {
+            let repos = selected();
+            async move { api::get_overview(repos).await }
+        },
     )?;
+    let mut repo_options = (repos.value)().unwrap_or_default();
+    repo_options.retain(|r| r.monitored);
+    repo_options.sort_by_key(|r| std::cmp::Reverse(r.stars));
+    let selected_count = selected()
+        .iter()
+        .filter(|r| r.as_str() != "__none__")
+        .count();
+    let filter_label = if selected().is_empty() {
+        "All repos".to_string()
+    } else if selected().iter().any(|r| r == "__none__") {
+        "0 repos".to_string()
+    } else if selected_count == 1 {
+        selected()
+            .iter()
+            .find(|r| r.as_str() != "__none__")
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        format!("{selected_count} repos")
+    };
     let Some(o) = (overview.value)() else {
         return rsx! { div { class: "page", h1 { "Overview" } } };
     };
 
     rsx! {
         div { class: "page",
-            h1 {
-                "Overview"
-                if (overview.loading)() { span { class: "loading-dot", " syncing…" } }
+            div { class: "page-head",
+                h1 {
+                    "Overview"
+                    if (overview.loading)() { span { class: "loading-dot", " syncing…" } }
+                }
+                DropdownMenu {
+                    open: menu_open,
+                    on_open_change: move |v: bool| menu_open.set(Some(v)),
+                    DropdownMenuTrigger { "{filter_label}" }
+                    DropdownMenuContent {
+                        class: "columns-menu",
+                        div { class: "colrow filter-actions",
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                size: ButtonSize::Xs,
+                                onclick: move |_| selected.set(Vec::new()),
+                                "select all"
+                            }
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                size: ButtonSize::Xs,
+                                onclick: move |_| selected.set(vec!["__none__".to_string()]),
+                                "deselect all"
+                            }
+                        }
+                        for repo in repo_options.iter() {
+                            OverviewRepoItem {
+                                key: "{repo.name}",
+                                name: repo.name.clone(),
+                                selected: selected,
+                            }
+                        }
+                    }
+                }
             }
             if let Some(e) = (overview.error)() {
                 p { class: "muted", "error: {e}" }
@@ -45,6 +145,44 @@ pub fn Overview() -> Element {
                 PrSummaryList { title: "New this week", items: o.new_this_week.clone(), empty: "nothing new" }
                 PrSummaryList { title: "First-time contributors", items: o.first_time_contributors.clone(), empty: "none this week" }
             }
+        }
+    }
+}
+
+#[component]
+fn OverviewRepoItem(name: String, mut selected: Signal<Vec<String>>) -> Element {
+    let state_name = name.clone();
+    let state = use_memo(move || {
+        Some(
+            if selected().is_empty() || selected().iter().any(|repo| repo == &state_name) {
+                CheckboxState::Checked
+            } else {
+                CheckboxState::Unchecked
+            },
+        )
+    });
+    let label = name
+        .strip_prefix("DioxusLabs/")
+        .unwrap_or(&name)
+        .to_string();
+    rsx! {
+        label { class: "colrow",
+            Checkbox {
+                checked: state,
+                on_checked_change: move |state: CheckboxState| {
+                    let mut repos = selected();
+                    repos.retain(|repo| repo != "__none__");
+                    if state == CheckboxState::Checked {
+                        if !repos.iter().any(|repo| repo == &name) {
+                            repos.push(name.clone());
+                        }
+                    } else {
+                        repos.retain(|repo| repo != &name);
+                    }
+                    selected.set(repos);
+                },
+            }
+            "{label}"
         }
     }
 }

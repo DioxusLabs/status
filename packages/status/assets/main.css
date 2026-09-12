@@ -215,7 +215,16 @@ a:hover { text-decoration: underline; }
 }
 .colrow:hover { background: var(--bg); }
 .colrow .dx-checkbox[data-state="checked"] { background: var(--accent); color: var(--bg); }
-.filter-bar .columns-menu { right: 0; left: auto; }
+.filter-bar .columns-menu,
+.page-head .columns-menu { right: 0; left: auto; }
+.page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+.page-head h1 { margin: 0; }
+.filter-actions { gap: 6px; }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .chip {
