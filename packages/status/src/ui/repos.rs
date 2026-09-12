@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use super::widgets::format_compact;
 use crate::api;
 use crate::components::select::{Select, SelectOption};
@@ -8,12 +9,15 @@ use crate::Route;
 
 #[component]
 pub fn Repos() -> Element {
-    let repos = use_resource(|| async move { api::list_repos().await });
+    let repos = use_cached(|| "repos".to_string(), || async { api::list_repos().await })?;
     let mut sort = use_signal(|| "pushed".to_string());
     rsx! {
         div { class: "page",
             div { class: "filter-bar",
-                h1 { "Repos" }
+                h1 {
+                    "Repos"
+                    if (repos.loading)() { span { class: "loading-dot", " syncing…" } }
+                }
                 Select {
                     default_value: "pushed".to_string(),
                     on_value_change: move |v: Option<String>| {
@@ -39,8 +43,11 @@ pub fn Repos() -> Element {
                     }
                 }
             }
-            match repos() {
-                Some(Ok(rows)) => {
+            if let Some(e) = (repos.error)() {
+                p { class: "muted", "error: {e}" }
+            }
+            match (repos.value)() {
+                Some(rows) => {
                     let mut rows = rows;
                     match sort().as_str() {
                         "stars" => rows.sort_by_key(|r| std::cmp::Reverse(r.stars)),
@@ -62,7 +69,6 @@ pub fn Repos() -> Element {
                         }
                     }
                 }
-                Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
                 None => rsx! { p { class: "muted", "loading…" } },
             }
         }

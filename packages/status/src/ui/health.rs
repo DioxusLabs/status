@@ -1,18 +1,29 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use super::widgets::{format_compact, LineChart, Sparkline};
 use crate::api;
 
 #[component]
 pub fn Health() -> Element {
-    let health = use_resource(|| async move { api::get_health().await });
+    let health = use_cached(
+        || "health".to_string(),
+        || async { api::get_health().await },
+    )?;
+    let Some(h) = (health.value)() else {
+        return rsx! { div { class: "page", h1 { "Health" } } };
+    };
 
     rsx! {
         div { class: "page",
-            h1 { "Health" }
-            match health() {
-                Some(Ok(h)) => rsx! {
-                    div { class: "health-strip",
+            h1 {
+                "Health"
+                if (health.loading)() { span { class: "loading-dot", " syncing…" } }
+            }
+            if let Some(e) = (health.error)() {
+                p { class: "muted", "error: {e}" }
+            }
+            div { class: "health-strip",
                         div { class: "stat",
                             div { class: "stat-value", "{h.open_prs}" }
                             div { class: "stat-label muted", "open PRs" }
@@ -74,10 +85,6 @@ pub fn Health() -> Element {
                             }
                         }
                     }
-                },
-                Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
-                None => rsx! { p { class: "muted", "loading…" } },
-            }
         }
     }
 }

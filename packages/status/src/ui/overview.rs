@@ -1,27 +1,28 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use super::widgets::{format_compact, PrSummaryList};
 use crate::api;
 
 #[component]
 pub fn Overview() -> Element {
-    let overview = use_resource(|| async move { api::get_overview().await });
-
-    let Some(Ok(o)) = overview() else {
-        return rsx! {
-            div { class: "page",
-                h1 { "Overview" }
-                match overview() {
-                    Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
-                    _ => rsx! { p { class: "muted", "loading…" } },
-                }
-            }
-        };
+    let overview = use_cached(
+        || "overview".to_string(),
+        || async { api::get_overview().await },
+    )?;
+    let Some(o) = (overview.value)() else {
+        return rsx! { div { class: "page", h1 { "Overview" } } };
     };
 
     rsx! {
         div { class: "page",
-            h1 { "Overview" }
+            h1 {
+                "Overview"
+                if (overview.loading)() { span { class: "loading-dot", " syncing…" } }
+            }
+            if let Some(e) = (overview.error)() {
+                p { class: "muted", "error: {e}" }
+            }
             div { class: "health-strip",
                 Stat { label: "Open PRs", value: "{o.open_prs}" }
                 Stat { label: "Open issues", value: "{o.open_issues}" }
@@ -50,8 +51,11 @@ pub fn Overview() -> Element {
 
 #[component]
 fn DevinActivity() -> Element {
-    let sessions = use_resource(|| async move { api::list_sessions(None, None, 500).await });
-    let Some(Ok(rows)) = sessions() else {
+    let sessions = use_cached(
+        || "sessions:all".to_string(),
+        || async { api::list_sessions(None, None, 500).await },
+    )?;
+    let Some(rows) = (sessions.value)() else {
         return rsx! {};
     };
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();

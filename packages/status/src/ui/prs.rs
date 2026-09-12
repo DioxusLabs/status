@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use dioxus_primitives::checkbox::CheckboxState;
 
+use super::cache::use_cached;
 use super::layout::AdminState;
 use super::widgets::{assoc_label, CiDot, ScoreBadge};
 use crate::api;
@@ -40,15 +41,13 @@ pub fn PullRequests() -> Element {
     let expanded = use_signal(|| Option::<(String, i64)>::None);
     let detail = use_signal(|| Option::<crate::model::PrDetail>::None);
     let syncing = use_signal(|| false);
-    let last_rows = use_signal(Vec::<PrRow>::new);
-    let fetch_err = use_signal(|| Option::<String>::None);
     #[cfg_attr(not(feature = "web"), allow(unused_mut))]
     let mut columns = use_signal(default_columns);
     let mut colmenu_open = use_signal(|| Some(false));
     #[cfg(feature = "web")]
     let mut cols_loaded = use_signal(|| false);
 
-    let repos = use_resource(|| async move { api::list_repos().await.unwrap_or_default() });
+    let repos = use_cached(|| "repos".to_string(), || async { api::list_repos().await })?;
 
     // Persist column selection (web only).
     #[cfg(feature = "web")]
@@ -228,7 +227,10 @@ pub fn PullRequests() -> Element {
                     button { class: "chip", onclick: move |_| apply_chip(id), "{label}" }
                 }
             }
-            if let Some(repos) = repos() {
+            if let Some(e) = (repos.error)() {
+                p { class: "muted", "error: {e}" }
+            }
+            if let Some(repos) = (repos.value)() {
                 div { class: "chips repos",
                     for r in repos.iter().filter(|r| r.monitored) {
                         {
@@ -254,24 +256,7 @@ pub fn PullRequests() -> Element {
                 }
             }
             SuspenseBoundary {
-                fallback: move |_| rsx! {
-                    if last_rows().is_empty() {
-                        p { class: "muted",
-                            if let Some(e) = fetch_err() {
-                                "error: {e}"
-                            } else {
-                                "loading…"
-                            }
-                        }
-                    } else {
-                        PrsTableBody {
-                            rows: last_rows(),
-                            expanded: expanded,
-                            detail: detail,
-                            columns: columns,
-                        }
-                    }
-                },
+                fallback: |_| rsx! { p { class: "muted", "loading…" } },
                 PrsTable {
                     committed: committed,
                     repos_sel: repos_sel,
@@ -279,8 +264,6 @@ pub fn PullRequests() -> Element {
                     expanded: expanded,
                     detail: detail,
                     syncing: syncing,
-                    last_rows: last_rows,
-                    fetch_err: fetch_err,
                     columns: columns,
                 }
             }
@@ -288,8 +271,8 @@ pub fn PullRequests() -> Element {
     }
 }
 
-/// Fetches PRs; reports them into `last_rows` so the table (and the suspense
-/// fallback during refetch) always has rows to render.
+/// Fetches PRs with stale-while-revalidate behavior: cached rows remain
+/// visible while a changed filter is fetched in the background.
 #[component]
 fn PrsTable(
     committed: Signal<String>,
@@ -298,45 +281,44 @@ fn PrsTable(
     expanded: Signal<Option<(String, i64)>>,
     detail: Signal<Option<crate::model::PrDetail>>,
     mut syncing: Signal<bool>,
-    mut last_rows: Signal<Vec<PrRow>>,
-    mut fetch_err: Signal<Option<String>>,
     columns: Signal<Vec<String>>,
 ) -> Element {
-    let prs = use_server_future(move || {
-        let filter = PrFilter {
-            repos: repos_sel(),
-            query: committed(),
-            state: Some("open".into()),
-            sort: sort(),
-            limit: 200,
-            ..Default::default()
-        };
-        async move { api::list_prs(filter).await }
-    })?;
+    let prs = use_cached(
+        move || {
+            let filter = PrFilter {
+                repos: repos_sel(),
+                query: committed(),
+                state: Some("open".into()),
+                sort: sort(),
+                limit: 200,
+                ..Default::default()
+            };
+            format!("prs:{}", serde_json::to_string(&filter).unwrap_or_default())
+        },
+        move || {
+            let filter = PrFilter {
+                repos: repos_sel(),
+                query: committed(),
+                state: Some("open".into()),
+                sort: sort(),
+                limit: 200,
+                ..Default::default()
+            };
+            async move { api::list_prs(filter).await }
+        },
+    )?;
 
-    // Sync results into last_rows during render so SSR output (and the
-    // suspense fallback during refetch) always has the latest rows.
-    let latest = prs.value().read().clone();
-    if let Some(Ok(rows)) = &latest {
-        if *last_rows.peek() != *rows {
-            last_rows.set(rows.clone());
-        }
+    if *syncing.peek() != (prs.loading)() {
+        syncing.set((prs.loading)());
     }
-    use_effect(move || {
-        syncing.set(matches!(*prs.state().read(), UseResourceState::Pending));
-        if let Some(Err(e)) = &*prs.value().read() {
-            fetch_err.set(Some(e.to_string()));
-        } else {
-            fetch_err.set(None);
-        }
-    });
+    let rows = (prs.value)().unwrap_or_default();
 
     rsx! {
-        if let Some(e) = fetch_err() {
+        if let Some(e) = (prs.error)() {
             p { class: "muted", "error: {e}" }
         }
         PrsTableBody {
-            rows: last_rows(),
+            rows: rows,
             expanded: expanded,
             detail: detail,
             columns: columns,

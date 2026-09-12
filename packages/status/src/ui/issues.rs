@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use crate::api;
 use crate::model::{IssueFilter, IssueRow};
 
@@ -23,20 +24,41 @@ pub fn Issues() -> Element {
         });
     });
 
-    let issues = use_resource(move || async move {
-        api::list_issues(IssueFilter {
-            query: committed(),
-            state: Some("open".into()),
-            sort: Some(sort()),
-            limit: 200,
-            ..Default::default()
-        })
-        .await
-    });
+    let issues = use_cached(
+        move || {
+            let filter = IssueFilter {
+                query: committed(),
+                state: Some("open".into()),
+                sort: Some(sort()),
+                limit: 200,
+                ..Default::default()
+            };
+            format!(
+                "issues:{}",
+                serde_json::to_string(&filter).unwrap_or_default()
+            )
+        },
+        move || {
+            let filter = IssueFilter {
+                query: committed(),
+                state: Some("open".into()),
+                sort: Some(sort()),
+                limit: 200,
+                ..Default::default()
+            };
+            async move { api::list_issues(filter).await }
+        },
+    )?;
 
     rsx! {
         div { class: "page",
-            h1 { "Issues" }
+            h1 {
+                "Issues"
+                if (issues.loading)() { span { class: "loading-dot", " syncing…" } }
+            }
+            if let Some(e) = (issues.error)() {
+                p { class: "muted", "error: {e}" }
+            }
             div { class: "filter-bar",
                 input {
                     class: "search",
@@ -53,8 +75,8 @@ pub fn Issues() -> Element {
                     option { value: "reactions", "Sort: most reactions" }
                 }
             }
-            match issues() {
-                Some(Ok(rows)) => rsx! {
+            match (issues.value)() {
+                Some(rows) => rsx! {
                     table { class: "data",
                         thead {
                             tr {
@@ -74,7 +96,6 @@ pub fn Issues() -> Element {
                         }
                     }
                 },
-                Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
                 None => rsx! { p { class: "muted", "loading…" } },
             }
         }

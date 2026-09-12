@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use super::layout::AdminState;
 use super::widgets::assoc_label;
 use crate::api;
@@ -40,9 +41,14 @@ pub fn Releases() -> Element {
 
 #[component]
 fn ReleasesBody() -> Element {
-    let rows = use_server_future(api::get_releases_overview)?;
-    match &*rows.value().read() {
-        Some(Ok(rows)) => rsx! {
+    let cached = use_cached(
+        || "releases".to_string(),
+        || async { api::get_releases_overview().await },
+    )?;
+    match (cached.value)() {
+        Some(rows) => rsx! {
+            if (cached.loading)() { span { class: "loading-dot", "syncing…" } }
+            if let Some(e) = (cached.error)() { p { class: "muted", "error: {e}" } }
             div { class: "grid cards",
                 for r in rows.iter() {
                     Link {
@@ -88,7 +94,6 @@ fn ReleasesBody() -> Element {
                 }
             }
         },
-        Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
         None => rsx! { p { class: "muted", "loading…" } },
     }
 }
@@ -128,15 +133,19 @@ fn changelog_markdown(d: &ReleaseDetail) -> String {
 
 #[component]
 fn ReleaseDetailBody(repo: String) -> Element {
-    let mut refresh = use_signal(|| 0u32);
-    let detail = use_server_future({
-        let repo = repo.clone();
-        move || {
-            refresh();
+    let detail = use_cached(
+        {
             let repo = repo.clone();
-            async move { api::get_release_detail(repo).await }
-        }
-    })?;
+            move || format!("release:{repo}")
+        },
+        {
+            let repo = repo.clone();
+            move || {
+                let repo = repo.clone();
+                async move { api::get_release_detail(repo).await }
+            }
+        },
+    )?;
     let admin = (consume_context::<AdminState>().0)();
     let mut copied = use_signal(|| false);
     let mut form_version = use_signal(String::new);
@@ -145,9 +154,8 @@ fn ReleaseDetailBody(repo: String) -> Element {
     let mut form_title = use_signal(String::new);
     let mut form_err = use_signal(|| Option::<String>::None);
 
-    let d = match &*detail.value().read() {
-        Some(Ok(d)) => d.clone(),
-        Some(Err(e)) => return rsx! { p { class: "muted", "error: {e}" } },
+    let d = match (detail.value)() {
+        Some(d) => d,
         None => return rsx! { p { class: "muted", "loading…" } },
     };
 
@@ -164,7 +172,13 @@ fn ReleaseDetailBody(repo: String) -> Element {
         .unwrap_or_else(|| "next".into());
 
     rsx! {
-        h1 { "{repo}" }
+        h1 {
+            "{repo}"
+            if (detail.loading)() { span { class: "loading-dot", " syncing…" } }
+        }
+        if let Some(e) = (detail.error)() {
+            p { class: "muted", "error: {e}" }
+        }
         if let Some(r) = latest {
             p { class: "rel-meta",
                 "latest "
@@ -281,9 +295,10 @@ fn ReleaseDetailBody(repo: String) -> Element {
                         onchange: move |e| {
                             let id = t.id;
                             let v = e.checked();
+                            let cached = detail;
                             spawn(async move {
                                 if api::set_release_target_done(id, v).await.is_ok() {
-                                    *refresh.write() += 1;
+                                    cached.restart();
                                 }
                             });
                         },
@@ -303,9 +318,10 @@ fn ReleaseDetailBody(repo: String) -> Element {
                             size: ButtonSize::Xs,
                             onclick: move |_| {
                                 let id = t.id;
+                                let cached = detail;
                                 spawn(async move {
                                     if api::remove_release_target(id).await.is_ok() {
-                                        *refresh.write() += 1;
+                                        cached.restart();
                                     }
                                 });
                             },
@@ -363,12 +379,13 @@ fn ReleaseDetailBody(repo: String) -> Element {
                             let number = form_number().parse::<i64>().ok();
                             let title = form_title();
                             form_err.set(None);
+                            let cached = detail;
                             spawn(async move {
                                 match api::add_release_target(repo, version, kind, number, title).await {
                                     Ok(()) => {
                                         form_title.set(String::new());
                                         form_number.set(String::new());
-                                        *refresh.write() += 1;
+                                        cached.restart();
                                     }
                                     Err(e) => form_err.set(Some(e.to_string())),
                                 }

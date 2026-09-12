@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use crate::api;
 use crate::components::badge::{Badge, BadgeVariant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
@@ -249,15 +250,21 @@ pub fn Bots() -> Element {
     let mut msg_for = use_signal(|| Option::<String>::None);
     let mut msg_text = use_signal(String::new);
 
-    let status = use_resource(move || async move {
-        let _ = refresh();
-        api::get_devin_status().await
-    });
-    let sessions = use_resource(move || async move {
-        let _ = refresh();
-        let f = repo_filter();
-        api::list_sessions(if f.is_empty() { None } else { Some(f) }, None, 200).await
-    });
+    let status = use_cached(
+        || "devin:status".to_string(),
+        move || async move {
+            let _ = refresh();
+            api::get_devin_status().await
+        },
+    )?;
+    let sessions = use_cached(
+        move || format!("sessions:{}", repo_filter()),
+        move || async move {
+            let _ = refresh();
+            let f = repo_filter();
+            api::list_sessions(if f.is_empty() { None } else { Some(f) }, None, 200).await
+        },
+    )?;
     let admin = use_resource(|| async move { api::is_admin().await.unwrap_or(false) });
 
     let mut poll =
@@ -273,9 +280,15 @@ pub fn Bots() -> Element {
 
     rsx! {
         div { class: "page",
-            h1 { "Bots" }
-            match &*status.read() {
-                Some(Ok(s)) => rsx! {
+            h1 {
+                "Bots"
+                if (status.loading)() || (sessions.loading)() {
+                    span { class: "loading-dot", " syncing…" }
+                }
+            }
+            if let Some(e) = (status.error)() { p { class: "muted", "error: {e}" } }
+            match (status.value)() {
+                Some(s) => rsx! {
                     div { class: "card narrow",
                         h3 { "Devin" }
                         p {
@@ -286,9 +299,9 @@ pub fn Bots() -> Element {
                         p { class: "muted small", "{s.api_base}" }
                     }
                 },
-                Some(Err(e)) => rsx! { p { class: "fail-text", "{e}" } },
-                _ => rsx! {},
+                None => rsx! {},
             }
+            if let Some(e) = (sessions.error)() { p { class: "fail-text", "{e}" } }
             div { class: "card",
                 div { class: "filterbar",
                     input {
@@ -298,9 +311,9 @@ pub fn Bots() -> Element {
                         oninput: move |e| repo_filter.set(e.value()),
                     }
                 }
-                match &*sessions.read() {
-                    Some(Ok(rows)) if rows.is_empty() => rsx! { p { class: "muted", "No sessions yet." } },
-                    Some(Ok(rows)) => rsx! {
+                match (sessions.value)() {
+                    Some(rows) if rows.is_empty() => rsx! { p { class: "muted", "No sessions yet." } },
+                    Some(rows) => rsx! {
                         table { class: "data",
                             thead {
                                 tr {
@@ -366,7 +379,6 @@ pub fn Bots() -> Element {
                             }
                         }
                     },
-                    Some(Err(e)) => rsx! { p { class: "fail-text", "{e}" } },
                     None => rsx! { p { class: "muted", "loading…" } },
                 }
             }

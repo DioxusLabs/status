@@ -1,4 +1,5 @@
 mod bots;
+pub mod cache;
 mod health;
 mod issues;
 mod layout;

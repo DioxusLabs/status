@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::cache::use_cached;
 use super::widgets::{format_compact, CiDot, ScoreBadge, Sparkline};
 use crate::api;
 
@@ -18,15 +19,23 @@ pub fn RepoDetail(name: String) -> Element {
 #[component]
 fn RepoDetailBody(name: String) -> Element {
     let mut tab = use_signal(|| "overview".to_string());
-    let detail = use_server_future({
-        let name = name.clone();
-        move || {
+    let detail = use_cached(
+        {
             let name = name.clone();
-            async move { api::get_repo(name).await }
-        }
-    })?;
-    let out = match &*detail.value().read() {
-        Some(Ok(d)) => rsx! {
+            move || format!("repo:{name}")
+        },
+        {
+            let name = name.clone();
+            move || {
+                let name = name.clone();
+                async move { api::get_repo(name).await }
+            }
+        },
+    )?;
+    let out = match (detail.value)() {
+        Some(d) => rsx! {
+            if (detail.loading)() { span { class: "loading-dot", "syncing…" } }
+            if let Some(e) = (detail.error)() { p { class: "muted", "error: {e}" } }
                     h1 { "{d.repo.name}" }
                     p { class: "muted", "{d.repo.description}" }
                     div { class: "health-strip",
@@ -142,7 +151,6 @@ fn RepoDetailBody(name: String) -> Element {
                         },
                     }
         },
-        Some(Err(e)) => rsx! { p { class: "muted", "error: {e}" } },
         None => rsx! { p { class: "muted", "loading…" } },
     };
     out
