@@ -21,6 +21,12 @@ fn guard_for(kind: &str) -> Arc<tokio::sync::Mutex<()>> {
         .clone()
 }
 
+/// Delay between per-repo sync calls to stay under GitHub secondary limits.
+const SYNC_REPO_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+const SYNC_RELEASE_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+const DEVIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+const DEVIN_POLL_BATCH: i64 = 20;
+
 fn now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -111,7 +117,7 @@ async fn sync_prs_issues() -> anyhow::Result<String> {
             Ok(_) => {}
             Err(e) => warn!("sync closed prs {repo}: {e:#}"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        tokio::time::sleep(SYNC_REPO_DELAY).await;
         match github::sync_open_issues(repo, &members).await {
             Ok(n) => {
                 db::log_sync("issues", repo, &now(), true, &format!("{n} open issues")).await?
@@ -128,7 +134,7 @@ async fn sync_prs_issues() -> anyhow::Result<String> {
             Ok(_) => {}
             Err(e) => warn!("sync closed issues {repo}: {e:#}"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        tokio::time::sleep(SYNC_REPO_DELAY).await;
     }
     Ok(format!("{total} open prs across {} repos", repos.len()))
 }
@@ -173,7 +179,7 @@ async fn sync_releases() -> anyhow::Result<String> {
             }
             Err(e) => warn!("merged backfill {repo}: {e:#}"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        tokio::time::sleep(SYNC_RELEASE_DELAY).await;
     }
     Ok(format!("{total} releases"))
 }
@@ -243,8 +249,8 @@ fn spawn_devin_poller() {
     }
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            match db::pending_devin_sessions(20).await {
+            tokio::time::sleep(DEVIN_POLL_INTERVAL).await;
+            match db::pending_devin_sessions(DEVIN_POLL_BATCH).await {
                 Ok(rows) => {
                     for row in rows {
                         if let Err(e) = actions::poll_session(&row).await {

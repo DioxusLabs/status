@@ -30,10 +30,7 @@ impl RepoFilter {
             RepoFilter::All => "All repos".into(),
             RepoFilter::Only(repos) => match repos.len() {
                 0 => "No repos".into(),
-                1 => repos[0]
-                    .strip_prefix("DioxusLabs/")
-                    .unwrap_or(&repos[0])
-                    .to_string(),
+                1 => repos[0].clone(),
                 n => format!("{n} repos"),
             },
         }
@@ -178,10 +175,7 @@ fn OverviewRepoItem(
         RepoFilter::All => true,
         RepoFilter::Only(repos) => repos.iter().any(|repo| repo == &state_name),
     });
-    let label = name
-        .strip_prefix("DioxusLabs/")
-        .unwrap_or(&name)
-        .to_string();
+    let label = name.clone();
     let toggle = EventHandler::new(move |on: bool| {
         let mut repos = match selected() {
             RepoFilter::All => monitored.clone(),

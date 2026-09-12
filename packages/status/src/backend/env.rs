@@ -72,11 +72,13 @@ pub fn devin_org_id() -> Option<String> {
     var("DEVIN_ORG_ID")
 }
 
+const DEFAULT_LLM_BUDGET: i64 = 50;
+
 pub fn llm_daily_budget() -> i64 {
     std::env::var("LLM_DAILY_BUDGET")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
+        .unwrap_or(DEFAULT_LLM_BUDGET)
 }
 
 fn interval_secs(key: &str, default: u64) -> u64 {

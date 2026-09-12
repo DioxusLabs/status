@@ -110,8 +110,7 @@ pub(crate) struct DbPr {
 }
 
 impl DbPr {
-    #[allow(clippy::wrong_self_convention)]
-    pub fn into_row(&self) -> PrRow {
+    pub fn to_row(&self) -> PrRow {
         PrRow {
             id: self.id,
             repo: self.repo.clone(),
@@ -141,15 +140,30 @@ impl DbPr {
         }
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    pub fn into_detail(self) -> PrDetail {
+    pub fn to_detail(&self) -> PrDetail {
         PrDetail {
-            pr: self.into_row(),
+            pr: self.to_row(),
             body: self.body.clone().unwrap_or_default(),
             head_sha: self.head_sha.clone().unwrap_or_default(),
             base_ref: self.base_ref.clone().unwrap_or_default(),
             files: json_vec(&self.files_json),
             score_parts: json_vec(&self.score_breakdown_json),
+        }
+    }
+}
+
+impl From<&DbPr> for PrSummary {
+    fn from(p: &DbPr) -> Self {
+        let row = p.to_row();
+        PrSummary {
+            repo: row.repo,
+            number: row.number,
+            title: row.title,
+            url: row.url,
+            author: row.author,
+            age_days: days_since_rfc3339(row.created_at.as_deref()),
+            score: row.score,
+            ci_state: row.ci_state,
         }
     }
 }
@@ -354,7 +368,7 @@ pub async fn get_pr(repo: &str, number: i64) -> anyhow::Result<Option<PrDetail>>
             .bind(number)
             .fetch_optional(pool())
             .await?;
-    Ok(row.map(|r| r.into_detail()))
+    Ok(row.map(|r| r.to_detail()))
 }
 
 pub async fn open_pr_numbers(repo: &str) -> anyhow::Result<Vec<i64>> {
@@ -649,7 +663,7 @@ pub async fn list_devin_sessions(
     .bind(repo)
     .bind(number)
     .bind(number)
-    .bind(limit.clamp(1, 500))
+    .bind(limit.clamp(1, MAX_LIST_LIMIT))
     .fetch_all(pool())
     .await?;
     Ok(rows.into_iter().map(Into::into).collect())
@@ -807,7 +821,7 @@ pub async fn budget_used_today() -> anyhow::Result<i64> {
 
 /// Daily limit: `settings.llm_daily_budget` overrides env `LLM_DAILY_BUDGET`.
 pub async fn budget_limit() -> anyhow::Result<i64> {
-    if let Ok(Some(v)) = get_setting("llm_daily_budget").await {
+    if let Ok(Some(v)) = get_setting(SETTING_LLM_BUDGET).await {
         if let Ok(n) = v.parse() {
             return Ok(n);
         }
@@ -932,6 +946,34 @@ pub async fn list_milestones(repo: Option<&str>) -> anyhow::Result<Vec<Milestone
             url: r.6.unwrap_or_default(),
         })
         .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn upsert_release(
+    repo: &str,
+    tag: &str,
+    name: Option<&str>,
+    published_at: Option<&str>,
+    url: &str,
+    is_prerelease: bool,
+    assets_json: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO releases (repo, tag, name, published_at, url, is_prerelease, assets_json)
+         VALUES (?,?,?,?,?,?,?)
+         ON CONFLICT(repo, tag) DO UPDATE SET name=excluded.name, published_at=excluded.published_at,
+            url=excluded.url, is_prerelease=excluded.is_prerelease, assets_json=excluded.assets_json",
+    )
+    .bind(repo)
+    .bind(tag)
+    .bind(name)
+    .bind(published_at)
+    .bind(url)
+    .bind(is_prerelease)
+    .bind(assets_json)
+    .execute(pool())
+    .await?;
+    Ok(())
 }
 
 pub async fn list_releases(repo: &str, limit: i64) -> anyhow::Result<Vec<ReleaseRow>> {

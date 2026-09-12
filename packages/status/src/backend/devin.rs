@@ -4,6 +4,9 @@ use serde_json::{json, Value};
 
 use super::env;
 
+/// Max chars of a Devin error body included in the error message.
+const ERR_BODY_MAX: usize = 300;
+
 fn http() -> anyhow::Result<reqwest::Client> {
     let key = env::devin_api_key().ok_or_else(|| anyhow!("DEVIN_API_KEY not set"))?;
     let mut headers = reqwest::header::HeaderMap::new();
@@ -83,7 +86,7 @@ async fn check(resp: reqwest::Response) -> anyhow::Result<reqwest::Response> {
     let detail = serde_json::from_str::<Value>(&body)
         .ok()
         .and_then(|v| v["detail"].as_str().map(String::from))
-        .unwrap_or_else(|| body.chars().take(300).collect());
+        .unwrap_or_else(|| body.chars().take(ERR_BODY_MAX).collect());
     Err(anyhow!("devin api {status}: {detail}"))
 }
 

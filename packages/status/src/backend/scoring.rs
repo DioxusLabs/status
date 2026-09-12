@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::ScorePart;
+use crate::model::{ScorePart, SizeBucket};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ScoreInput {
@@ -37,16 +37,6 @@ impl Score {
     }
 }
 
-pub fn size_bucket(lines: i64) -> &'static str {
-    match lines {
-        0..=20 => "xs",
-        21..=100 => "s",
-        101..=400 => "m",
-        401..=1000 => "l",
-        _ => "xl",
-    }
-}
-
 pub fn has_tests(files: &[String]) -> bool {
     files.iter().any(|f| {
         let f = f.to_lowercase();
@@ -57,6 +47,12 @@ pub fn has_tests(files: &[String]) -> bool {
     })
 }
 
+/// Merge-readiness score, clamped to 0..100. Weights:
+///   ci +25 green / +10 pending / +0 failing / +5 none
+///   mergeable +15 / 0;  review +15 approved / +5 none / -15 changes
+///   threads -3 each (cap -15);  size +10/+8/+5/+2/+0 (xs..xl)
+///   tests +8;  context +5;  author +5/+3/+0;  recency +5 / -10 past 90d
+///   docs+src +3;  draft -30;  file overlap -5;  risky labels -15/-10
 pub fn score_pr(input: &ScoreInput) -> Score {
     let mut s = Score::default();
 
@@ -92,12 +88,13 @@ pub fn score_pr(input: &ScoreInput) -> Score {
     }
 
     let lines = input.additions + input.deletions;
-    let (bucket, pts) = match size_bucket(lines) {
-        "xs" => ("xs", 10),
-        "s" => ("s", 8),
-        "m" => ("m", 5),
-        "l" => ("l", 2),
-        _ => ("xl", 0),
+    let bucket = SizeBucket::for_lines(lines);
+    let pts = match bucket {
+        SizeBucket::Xs => 10,
+        SizeBucket::S => 8,
+        SizeBucket::M => 5,
+        SizeBucket::L => 2,
+        SizeBucket::Xl => 0,
     };
     s.add(
         "size",

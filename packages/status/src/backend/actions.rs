@@ -5,6 +5,11 @@ use crate::model::{ActionKind, AssessmentView, DevinSessionRow, PrDetail};
 
 use super::{db, devin};
 
+/// Max chars of PR body included in a prompt.
+const PROMPT_BODY_MAX: usize = 4000;
+/// ACU cap on assess sessions.
+const ASSESS_MAX_ACU: i64 = 2;
+
 /// Rules baked into every prompt.
 const RULES: &str = r#"You are working in the DioxusLabs/{repo} repository.
 
@@ -124,7 +129,7 @@ pub fn build_prompt(
         ("mergeable", p.mergeable.clone()),
         ("review_decision", p.review_decision.clone()),
         ("unresolved_threads", p.unresolved_threads.to_string()),
-        ("body", pr.body.chars().take(4000).collect()),
+        ("body", pr.body.chars().take(PROMPT_BODY_MAX).collect()),
         ("files", files),
     ];
     Ok(format!("{}{}", render(RULES, &vars), body_kind))
@@ -169,7 +174,7 @@ pub async fn dispatch(
         &tags,
         repo,
         is_assess.then(assess_schema),
-        is_assess.then_some(2),
+        is_assess.then_some(ASSESS_MAX_ACU),
     )
     .await?;
     db::budget_consume().await?;

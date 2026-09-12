@@ -9,6 +9,25 @@ use super::scoring::{self, ScoreInput};
 
 static CLIENT: tokio::sync::OnceCell<octocrab::Octocrab> = tokio::sync::OnceCell::const_new();
 
+const MAX_GQL_ATTEMPTS: usize = 4;
+/// Warn when the GraphQL rate-limit remaining drops below this.
+const RATE_LIMIT_WARN: i64 = 200;
+/// Cap on merged-PR backfill per release changelog sync.
+const MERGED_BACKFILL_CAP: usize = 300;
+/// How far back closed/merged PRs and issues are synced.
+const CLOSED_SYNC_DAYS: i64 = 30;
+
+/// Extract `node[..][field]` strings from a GraphQL `nodes` array.
+fn str_list(nodes: &Value, field: &str) -> Vec<String> {
+    nodes
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|n| n[field].as_str().map(String::from))
+        .collect()
+}
+
 /// Octocrab client. Prefers GitHub App auth (GITHUB_APP_ID + private key +
 /// installation for the org); octocrab mints the RS256 JWT and refreshes the
 /// installation token itself. Falls back to GITHUB_TOKEN when the app is not
@@ -74,7 +93,7 @@ async fn app_client(app_id: u64, pem: &[u8]) -> anyhow::Result<octocrab::Octocra
 
 async fn graphql(query: &str, vars: Value) -> anyhow::Result<Value> {
     let body = json!({ "query": query, "variables": vars });
-    for attempt in 0..4 {
+    for attempt in 0..MAX_GQL_ATTEMPTS {
         match client().await?.graphql::<Value>(&body).await {
             Ok(resp) => {
                 if let Some(errors) = resp.get("errors") {
@@ -90,7 +109,7 @@ async fn graphql(query: &str, vars: Value) -> anyhow::Result<Value> {
                     .pointer("/data/rateLimit/remaining")
                     .and_then(|v| v.as_i64())
                 {
-                    if remaining < 200 {
+                    if remaining < RATE_LIMIT_WARN {
                         tracing::warn!("github graphql remaining={remaining}");
                     }
                 }
@@ -99,7 +118,7 @@ async fn graphql(query: &str, vars: Value) -> anyhow::Result<Value> {
             Err(e) => {
                 let msg = e.to_string();
                 if (msg.contains("403") || msg.contains("429") || msg.contains("secondary rate"))
-                    && attempt < 3
+                    && attempt + 1 < MAX_GQL_ATTEMPTS
                 {
                     tracing::warn!("github error {msg}, backing off");
                     tokio::time::sleep(Duration::from_secs(30 * (attempt + 1) as u64)).await;
@@ -293,20 +312,8 @@ fn map_pr(
 ) -> Option<DbPr> {
     let author = n["author"]["login"].as_str().unwrap_or("").to_string();
     let association = n["authorAssociation"].as_str().unwrap_or("").to_string();
-    let labels: Vec<String> = n["labels"]["nodes"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|l| l["name"].as_str().map(String::from))
-        .collect();
-    let files: Vec<String> = n["files"]["nodes"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|f| f["path"].as_str().map(String::from))
-        .collect();
+    let labels = str_list(&n["labels"]["nodes"], "name");
+    let files = str_list(&n["files"]["nodes"], "path");
     let reviewers: Vec<String> = n["reviewRequests"]["nodes"]
         .as_array()
         .cloned()
@@ -341,11 +348,7 @@ fn map_pr(
         .count()
         > 1;
     let ci = ci_state(n);
-    let days_since_activity = last_activity_at
-        .as_deref()
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
-        .unwrap_or(0);
+    let days_since_activity = crate::model::days_since_rfc3339(last_activity_at.as_deref());
     let score = scoring::score_pr(&ScoreInput {
         ci_state: ci.clone(),
         mergeable: n["mergeable"].as_str().unwrap_or("").to_string(),
@@ -423,15 +426,7 @@ pub async fn sync_open_prs(repo: &str, members: &HashSet<String>) -> anyhow::Res
     }
     let open_files: Vec<HashSet<String>> = raw_nodes
         .iter()
-        .map(|n| {
-            n["files"]["nodes"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|f| f["path"].as_str().map(String::from))
-                .collect()
-        })
+        .map(|n| str_list(&n["files"]["nodes"], "path").into_iter().collect())
         .collect();
     for n in &raw_nodes {
         if let Some(pr) = map_pr(repo, n, members, &open_files) {
@@ -481,7 +476,7 @@ query($org: String!, $repo: String!, $cursor: String) {
 /// search quota and fetches exactly the fields we store.
 pub async fn sync_closed_prs(repo: &str) -> anyhow::Result<usize> {
     let org = super::env::org();
-    let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(CLOSED_SYNC_DAYS);
     let mut cursor: Option<String> = None;
     let mut count = 0;
     'pages: loop {
@@ -499,13 +494,7 @@ pub async fn sync_closed_prs(repo: &str) -> anyhow::Result<usize> {
                 break 'pages;
             }
             let state = n["state"].as_str().unwrap_or("").to_lowercase();
-            let labels: Vec<String> = n["labels"]["nodes"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|l| l["name"].as_str().map(String::from))
-                .collect();
+            let labels = str_list(&n["labels"]["nodes"], "name");
             let pr = DbPr {
                 id: n["databaseId"].as_i64().unwrap_or(0),
                 repo: repo.to_string(),
@@ -580,7 +569,7 @@ query($org: String!, $repo: String!, $cursor: String) {
 
 pub async fn sync_closed_issues(repo: &str) -> anyhow::Result<usize> {
     let org = super::env::org();
-    let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(CLOSED_SYNC_DAYS);
     let mut cursor: Option<String> = None;
     let mut count = 0;
     'pages: loop {
@@ -597,13 +586,7 @@ pub async fn sync_closed_issues(repo: &str) -> anyhow::Result<usize> {
             if updated.is_some_and(|t| t.with_timezone(&chrono::Utc) < cutoff) {
                 break 'pages;
             }
-            let labels: Vec<String> = n["labels"]["nodes"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|l| l["name"].as_str().map(String::from))
-                .collect();
+            let labels = str_list(&n["labels"]["nodes"], "name");
             db::update_issue_lifecycle(&DbIssue {
                 id: n["databaseId"].as_i64().unwrap_or(0),
                 repo: repo.to_string(),
@@ -680,40 +663,9 @@ pub async fn sync_open_issues(repo: &str, members: &HashSet<String>) -> anyhow::
         for n in page["nodes"].as_array().cloned().unwrap_or_default() {
             seen.insert(n["number"].as_i64().unwrap_or(0));
             let login = n["author"]["login"].as_str().unwrap_or("");
-            let labels: Vec<String> = n["labels"]["nodes"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|l| l["name"].as_str().map(String::from))
-                .collect();
-            let assignees: Vec<String> = n["assignees"]["nodes"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|a| a["login"].as_str().map(String::from))
-                .collect();
-            let (mut at, mut by) = (
-                n["updatedAt"].as_str().map(String::from),
-                "contributor".to_string(),
-            );
-            if let Some(node) = n["timelineItems"]["nodes"]
-                .as_array()
-                .and_then(|v| v.last())
-            {
-                let alogin = node["author"]["login"].as_str().unwrap_or("");
-                if let Some(t) = node["createdAt"].as_str() {
-                    at = Some(t.to_string());
-                }
-                by = if alogin.ends_with("[bot]") {
-                    "bot".into()
-                } else if members.contains(alogin) {
-                    "maintainer".into()
-                } else {
-                    "contributor".into()
-                };
-            }
+            let labels = str_list(&n["labels"]["nodes"], "name");
+            let assignees = str_list(&n["assignees"]["nodes"], "login");
+            let (at, by) = last_activity(&n, members);
             db::upsert_issue(&DbIssue {
                 id: n["databaseId"].as_i64().unwrap_or(0),
                 repo: repo.to_string(),
@@ -788,20 +740,15 @@ pub async fn sync_releases(repo: &str) -> anyhow::Result<usize> {
                 download_count: a.download_count,
             })
             .collect();
-        sqlx::query(
-            "INSERT INTO releases (repo, tag, name, published_at, url, is_prerelease, assets_json)
-             VALUES (?,?,?,?,?,?,?)
-             ON CONFLICT(repo, tag) DO UPDATE SET name=excluded.name, published_at=excluded.published_at,
-                url=excluded.url, is_prerelease=excluded.is_prerelease, assets_json=excluded.assets_json",
+        db::upsert_release(
+            repo,
+            &r.tag_name,
+            r.name.as_deref(),
+            r.published_at.as_deref(),
+            &r.html_url,
+            r.prerelease,
+            &serde_json::to_string(&assets).unwrap_or_else(|_| "[]".into()),
         )
-        .bind(repo)
-        .bind(&r.tag_name)
-        .bind(&r.name)
-        .bind(&r.published_at)
-        .bind(&r.html_url)
-        .bind(r.prerelease)
-        .bind(serde_json::to_string(&assets).unwrap_or_else(|_| "[]".into()))
-        .execute(db::pool())
         .await?;
         count += 1;
     }
@@ -849,16 +796,10 @@ pub async fn sync_merged_since(repo: &str, since: &str) -> anyhow::Result<usize>
         let data = graphql(MERGED_PRS_SEARCH_QUERY, json!({ "q": q, "cursor": cursor })).await?;
         let page = &data["search"];
         for n in page["nodes"].as_array().cloned().unwrap_or_default() {
-            if count >= 300 {
+            if count >= MERGED_BACKFILL_CAP {
                 break 'pages;
             }
-            let labels: Vec<String> = n["labels"]["nodes"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|l| l["name"].as_str().map(String::from))
-                .collect();
+            let labels = str_list(&n["labels"]["nodes"], "name");
             let pr = DbPr {
                 id: n["databaseId"].as_i64().unwrap_or(0),
                 repo: repo.to_string(),

@@ -5,43 +5,31 @@ use dioxus::prelude::*;
 use crate::model::*;
 
 #[cfg(feature = "server")]
+use crate::backend::query::parse_query;
+#[cfg(feature = "server")]
 use crate::backend::{actions, auth, collector, db, devin, env};
 
+/// Number of PRs in each overview list.
 #[cfg(feature = "server")]
-fn pr_summary(p: &db::DbPr) -> PrSummary {
-    let row = p.into_row();
-    let age_days = row
-        .created_at
-        .as_deref()
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
-        .unwrap_or(0);
-    PrSummary {
-        repo: row.repo,
-        number: row.number,
-        title: row.title,
-        url: row.url,
-        author: row.author,
-        age_days,
-        score: row.score,
-        ci_state: row.ci_state,
-    }
-}
+const TOP_PRS_LIMIT: usize = 10;
+/// Minimum score for the ready-to-merge list.
+#[cfg(feature = "server")]
+const READY_SCORE_MIN: i64 = 60;
 
 #[post("/api/overview")]
 pub async fn get_overview(repos: Option<Vec<String>>) -> Result<Overview> {
     let mut o = Overview::default();
-    let (name_clause, _) = repo_clause("name", repos.as_deref());
-    let (repo_clause, repo_binds) = repo_clause("repo", repos.as_deref());
+    let (name_clause, _) = repo_in_clause("name", repos.as_deref());
+    let (repo_in, repo_binds) = repo_in_clause("repo", repos.as_deref());
 
     o.monitored_repos = scalar("SELECT COUNT(*) FROM repos WHERE monitored = 1", &[]).await?;
     o.open_prs = scalar(
-        &format!("SELECT COUNT(*) FROM pull_requests WHERE state = 'open'{repo_clause}"),
+        &format!("SELECT COUNT(*) FROM pull_requests WHERE state = 'open'{repo_in}"),
         &repo_binds,
     )
     .await?;
     o.open_issues = scalar(
-        &format!("SELECT COUNT(*) FROM issues WHERE state = 'open'{repo_clause}"),
+        &format!("SELECT COUNT(*) FROM issues WHERE state = 'open'{repo_in}"),
         &repo_binds,
     )
     .await?;
@@ -54,57 +42,57 @@ pub async fn get_overview(repos: Option<Vec<String>>) -> Result<Overview> {
         &format!(
             "SELECT COALESCE(SUM(d.downloads),0) FROM crate_downloads_daily d
          JOIN crates c ON c.name = d.crate_name
-         WHERE d.date >= date('now', '-7 days'){repo_clause}"
+         WHERE d.date >= date('now', '-7 days'){repo_in}"
         ),
         &repo_binds,
     )
     .await?;
     let has_week_old_snapshot: bool = scalar(
-        &format!("SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause})"),
+        &format!("SELECT EXISTS(SELECT 1 FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_in})"),
         &repo_binds,
     )
     .await?;
     if has_week_old_snapshot {
         let delta_binds: Vec<String> = (0..4).flat_map(|_| repo_binds.iter().cloned()).collect();
         o.stars_7d_delta = scalar(
-            &format!("SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE 1=1{repo_clause}){repo_clause})
-                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_clause}){repo_clause})"),
+            &format!("SELECT (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE 1=1{repo_in}){repo_in})
+                  - (SELECT SUM(stars) FROM repo_snapshots WHERE date = (SELECT MAX(date) FROM repo_snapshots WHERE date <= date('now','-7 days'){repo_in}){repo_in})"),
             &delta_binds,
         )
         .await?;
     }
 
     o.ready_to_merge = top_prs(
-        format!("SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'{repo_clause}
-         AND review_decision='APPROVED' AND mergeable='MERGEABLE' AND score >= 60
-         ORDER BY score DESC LIMIT 10"), repo_binds.clone(),
+        format!("SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'{repo_in}
+         AND review_decision='APPROVED' AND mergeable='MERGEABLE' AND score >= {READY_SCORE_MIN}
+         ORDER BY score DESC LIMIT {TOP_PRS_LIMIT}"), repo_binds.clone(),
     ).await?;
     o.quick_wins = top_prs(
-        format!("SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'{repo_clause}
-         AND (additions + deletions) <= 50 ORDER BY score DESC LIMIT 10"), repo_binds.clone(),
+        format!("SELECT * FROM pull_requests WHERE state='open' AND is_draft=0 AND ci_state='success'{repo_in}
+         AND (additions + deletions) <= 50 ORDER BY score DESC LIMIT {TOP_PRS_LIMIT}"), repo_binds.clone(),
     ).await?;
     o.going_stale = top_prs(
         format!(
-            "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0{repo_clause}
+            "SELECT * FROM pull_requests WHERE state='open' AND is_draft=0{repo_in}
          AND last_activity_by = 'contributor' AND author_association NOT IN ('MEMBER','OWNER')
-         AND last_activity_at < datetime('now', '-14 days') ORDER BY last_activity_at ASC LIMIT 10"
+         AND last_activity_at < datetime('now', '-14 days') ORDER BY last_activity_at ASC LIMIT {TOP_PRS_LIMIT}"
         ),
         repo_binds.clone(),
     )
     .await?;
     o.waiting_on_maintainer = top_prs(
-        format!("SELECT * FROM pull_requests WHERE state='open' AND last_activity_by = 'contributor'{repo_clause}
-         ORDER BY last_activity_at ASC LIMIT 10"), repo_binds.clone(),
+        format!("SELECT * FROM pull_requests WHERE state='open' AND last_activity_by = 'contributor'{repo_in}
+         ORDER BY last_activity_at ASC LIMIT {TOP_PRS_LIMIT}"), repo_binds.clone(),
     ).await?;
     o.new_this_week = top_prs(
-        format!("SELECT * FROM pull_requests WHERE state='open' AND created_at > datetime('now', '-7 days'){repo_clause}
-         ORDER BY created_at DESC LIMIT 10"), repo_binds.clone(),
+        format!("SELECT * FROM pull_requests WHERE state='open' AND created_at > datetime('now', '-7 days'){repo_in}
+         ORDER BY created_at DESC LIMIT {TOP_PRS_LIMIT}"), repo_binds.clone(),
     ).await?;
     o.first_time_contributors = top_prs(
         format!(
-            "SELECT * FROM pull_requests WHERE state='open'{repo_clause}
+            "SELECT * FROM pull_requests WHERE state='open'{repo_in}
          AND author_association IN ('FIRST_TIME_CONTRIBUTOR','FIRST_TIMER')
-         ORDER BY created_at DESC LIMIT 10"
+         ORDER BY created_at DESC LIMIT {TOP_PRS_LIMIT}"
         ),
         repo_binds,
     )
@@ -113,52 +101,8 @@ pub async fn get_overview(repos: Option<Vec<String>>) -> Result<Overview> {
     Ok(o)
 }
 
-#[cfg(feature = "server")]
-fn repo_clause(column: &str, repos: Option<&[String]>) -> (String, Vec<String>) {
-    let Some(repos) = repos else {
-        return (String::new(), Vec::new());
-    };
-    if repos.is_empty() {
-        return (" AND 1=0".into(), Vec::new());
-    }
-    let placeholders = std::iter::repeat_n("?", repos.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    (format!(" AND {column} IN ({placeholders})"), repos.to_vec())
-}
-
-#[cfg(feature = "server")]
-async fn scalar<T>(sql: &str, binds: &[String]) -> anyhow::Result<T>
-where
-    T: for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite> + Send + Unpin,
-{
-    let mut query = sqlx::query_scalar::<_, T>(sql);
-    for bind in binds {
-        query = query.bind(bind);
-    }
-    Ok(query.fetch_one(db::pool()).await?)
-}
-
-#[cfg(feature = "server")]
-async fn top_prs(sql: String, binds: Vec<String>) -> anyhow::Result<Vec<PrSummary>> {
-    let mut query = sqlx::query_as::<_, db::DbPr>(&sql);
-    for bind in binds {
-        query = query.bind(bind);
-    }
-    let rows = query.fetch_all(db::pool()).await?;
-    Ok(rows.iter().map(pr_summary).take(10).collect())
-}
-
-#[cfg(feature = "server")]
-fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
 #[post("/api/prs")]
 pub async fn list_prs(filter: PrFilter) -> Result<Vec<PrRow>> {
-    use crate::backend::query::parse_query;
     let parsed = parse_query(&filter.query);
 
     let mut sql = String::from("SELECT * FROM pull_requests WHERE 1=1");
@@ -236,14 +180,8 @@ pub async fn list_prs(filter: PrFilter) -> Result<Vec<PrRow>> {
         binds.push(a.clone());
     }
     if let Some(s) = &filter.size {
-        let cond = match s.as_str() {
-            "xs" => "(additions + deletions) <= 20",
-            "s" => "(additions + deletions) BETWEEN 21 AND 100",
-            "m" => "(additions + deletions) BETWEEN 101 AND 400",
-            "l" => "(additions + deletions) BETWEEN 401 AND 1000",
-            _ => "(additions + deletions) > 1000",
-        };
-        sql.push_str(&format!(" AND {cond}"));
+        let bucket = s.parse::<SizeBucket>().unwrap_or(SizeBucket::Xl);
+        sql.push_str(&format!(" AND {}", bucket.sql_filter()));
     }
     if let Some(days) = filter.min_age_days {
         sql.push_str(&format!(" AND created_at < datetime('now','-{days} days')"));
@@ -264,7 +202,7 @@ pub async fn list_prs(filter: PrFilter) -> Result<Vec<PrRow>> {
         PrSort::LastActivity => " ORDER BY last_activity_at DESC",
         PrSort::Size => " ORDER BY (additions + deletions) DESC",
     });
-    let limit = filter.limit.clamp(1, 500);
+    let limit = filter.limit.clamp(1, MAX_LIST_LIMIT);
     sql.push_str(&format!(" LIMIT {limit} OFFSET {}", filter.offset.max(0)));
 
     let mut q = sqlx::query_as::<_, db::DbPr>(&sql);
@@ -272,7 +210,7 @@ pub async fn list_prs(filter: PrFilter) -> Result<Vec<PrRow>> {
         q = q.bind(b);
     }
     let rows = q.fetch_all(db::pool()).await?;
-    Ok(rows.iter().map(|r| r.into_row()).collect())
+    Ok(rows.iter().map(|r| r.to_row()).collect())
 }
 
 #[get("/api/pr/:repo/:number")]
@@ -284,7 +222,6 @@ pub async fn get_pr(repo: String, number: i64) -> Result<PrDetail> {
 
 #[post("/api/issues")]
 pub async fn list_issues(filter: IssueFilter) -> Result<Vec<IssueRow>> {
-    use crate::backend::query::parse_query;
     let parsed = parse_query(&filter.query);
     let mut sql = String::from("SELECT * FROM issues WHERE 1=1");
     let mut binds: Vec<String> = vec![];
@@ -316,7 +253,7 @@ pub async fn list_issues(filter: IssueFilter) -> Result<Vec<IssueRow>> {
         Some("reactions") => " ORDER BY reactions DESC",
         _ => " ORDER BY updated_at DESC",
     });
-    let limit = filter.limit.clamp(1, 500);
+    let limit = filter.limit.clamp(1, MAX_LIST_LIMIT);
     sql.push_str(&format!(" LIMIT {limit} OFFSET {}", filter.offset.max(0)));
     let mut q = sqlx::query_as::<_, db::DbIssue>(&sql);
     for b in binds {
@@ -406,7 +343,7 @@ pub async fn get_repo(name: String) -> Result<RepoDetail> {
     .fetch_all(pool)
     .await?
     .iter()
-    .map(|r| r.into_row())
+    .map(|r| r.to_row())
     .collect();
     let recent_issues = sqlx::query_as::<_, db::DbIssue>(
         "SELECT * FROM issues WHERE repo = ? AND state='open' ORDER BY updated_at DESC LIMIT 15",
@@ -493,7 +430,7 @@ pub async fn get_health() -> Result<Health> {
 #[get("/api/settings")]
 pub async fn get_settings() -> Result<SettingsView> {
     let repos = db::list_repos().await?;
-    let crates: Vec<String> = db::get_setting("crates")
+    let crates: Vec<String> = db::get_setting(SETTING_CRATES)
         .await?
         .and_then(|v| serde_json::from_str(&v).ok())
         .unwrap_or_else(|| {
@@ -540,7 +477,7 @@ pub async fn set_monitored_repos(names: Vec<String>) -> Result<()> {
 #[post("/api/settings/crates")]
 pub async fn set_crates(names: Vec<String>) -> Result<()> {
     auth::require_admin()?;
-    db::set_setting("crates", &serde_json::to_string(&names)?).await?;
+    db::set_setting(SETTING_CRATES, &serde_json::to_string(&names)?).await?;
     Ok(())
 }
 
@@ -553,7 +490,7 @@ pub async fn sync_now(kind: String) -> Result<String> {
 #[post("/api/settings/budget")]
 pub async fn set_llm_budget(value: i64) -> Result<()> {
     auth::require_admin()?;
-    db::set_setting("llm_daily_budget", &value.to_string()).await?;
+    db::set_setting(SETTING_LLM_BUDGET, &value.to_string()).await?;
     Ok(())
 }
 
@@ -645,11 +582,7 @@ async fn release_overview_row(repo: &str) -> anyhow::Result<ReleaseOverviewRow> 
         .first()
         .filter(|r| r.is_prerelease)
         .map(|r| r.tag.clone());
-    let days_since = latest_stable
-        .and_then(|r| r.published_at.as_deref())
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
-        .unwrap_or(0);
+    let days_since = days_since_rfc3339(latest_stable.and_then(|r| r.published_at.as_deref()));
     let since = latest_stable
         .and_then(|r| r.published_at.clone())
         .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339());
@@ -690,9 +623,9 @@ pub async fn get_release_detail(repo: String) -> Result<ReleaseDetail> {
     if let Some(s) = &since {
         for p in db::merged_prs_since(&repo, s).await? {
             groups
-                .entry(changelog_group(&p.into_row()))
+                .entry(changelog_group(&p.to_row()))
                 .or_default()
-                .push(p.into_row());
+                .push(p.to_row());
         }
     }
     let unreleased: Vec<ChangelogGroup> = CHANGELOG_GROUP_ORDER
@@ -743,4 +676,47 @@ pub async fn set_release_target_done(id: i64, done: bool) -> Result<()> {
     db::set_release_target_done(id, done)
         .await
         .map_err(Into::into)
+}
+
+#[cfg(feature = "server")]
+fn repo_in_clause(column: &str, repos: Option<&[String]>) -> (String, Vec<String>) {
+    let Some(repos) = repos else {
+        return (String::new(), Vec::new());
+    };
+    if repos.is_empty() {
+        return (" AND 1=0".into(), Vec::new());
+    }
+    let placeholders = std::iter::repeat_n("?", repos.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    (format!(" AND {column} IN ({placeholders})"), repos.to_vec())
+}
+
+#[cfg(feature = "server")]
+async fn scalar<T>(sql: &str, binds: &[String]) -> anyhow::Result<T>
+where
+    T: for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite> + Send + Unpin,
+{
+    let mut query = sqlx::query_scalar::<_, T>(sql);
+    for bind in binds {
+        query = query.bind(bind);
+    }
+    Ok(query.fetch_one(db::pool()).await?)
+}
+
+#[cfg(feature = "server")]
+async fn top_prs(sql: String, binds: Vec<String>) -> anyhow::Result<Vec<PrSummary>> {
+    let mut query = sqlx::query_as::<_, db::DbPr>(&sql);
+    for bind in binds {
+        query = query.bind(bind);
+    }
+    let rows = query.fetch_all(db::pool()).await?;
+    Ok(rows.iter().map(PrSummary::from).collect())
+}
+
+#[cfg(feature = "server")]
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }

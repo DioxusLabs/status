@@ -9,17 +9,13 @@ use crate::components::input::Input;
 use crate::components::select::{Select, SelectOption};
 use crate::model::*;
 
-fn days_since(published: Option<&str>) -> i64 {
-    published
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
-        .unwrap_or(0)
-}
+const RELEASE_WARN_DAYS: i64 = 90;
+const RELEASE_FAIL_DAYS: i64 = 180;
 
 fn days_class(days: i64) -> &'static str {
-    if days > 180 {
+    if days > RELEASE_FAIL_DAYS {
         "fail-text"
-    } else if days > 90 {
+    } else if days > RELEASE_WARN_DAYS {
         "warn-text"
     } else {
         ""
@@ -161,7 +157,7 @@ fn ReleaseDetailBody(repo: String) -> Element {
 
     let latest = d.releases.iter().find(|r| !r.is_prerelease);
     let days = latest
-        .map(|r| days_since(r.published_at.as_deref()))
+        .map(|r| days_since_rfc3339(r.published_at.as_deref()))
         .unwrap_or(0);
     let markdown = changelog_markdown(&d);
     let targets = d.targets.clone();

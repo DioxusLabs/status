@@ -353,6 +353,91 @@ pub fn changelog_group(p: &PrRow) -> &'static str {
 pub const CHANGELOG_GROUP_ORDER: &[&str] =
     &["Breaking", "Features", "Fixes", "Docs", "Other", "Internal"];
 
+/// Max rows returned by list endpoints (prs, issues, devin sessions).
+#[cfg(feature = "server")]
+pub const MAX_LIST_LIMIT: i64 = 500;
+
+/// Settings-table keys shared by api handlers and the collector.
+#[cfg(feature = "server")]
+pub const SETTING_CRATES: &str = "crates";
+#[cfg(feature = "server")]
+pub const SETTING_LLM_BUDGET: &str = "llm_daily_budget";
+
+/// Whole days since an RFC3339 timestamp; 0 when missing or unparseable.
+pub fn days_since_rfc3339(t: Option<&str>) -> i64 {
+    t.and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
+        .unwrap_or(0)
+}
+
+/// PR size bucket (total changed lines). Stored/compared as "xs"…"xl".
+#[cfg(feature = "server")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SizeBucket {
+    Xs,
+    S,
+    M,
+    L,
+    Xl,
+}
+
+#[cfg(feature = "server")]
+impl SizeBucket {
+    pub fn for_lines(lines: i64) -> Self {
+        match lines {
+            0..=20 => SizeBucket::Xs,
+            21..=100 => SizeBucket::S,
+            101..=400 => SizeBucket::M,
+            401..=1000 => SizeBucket::L,
+            _ => SizeBucket::Xl,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SizeBucket::Xs => "xs",
+            SizeBucket::S => "s",
+            SizeBucket::M => "m",
+            SizeBucket::L => "l",
+            SizeBucket::Xl => "xl",
+        }
+    }
+
+    /// SQL fragment filtering `(additions + deletions)` to this bucket.
+    pub fn sql_filter(&self) -> &'static str {
+        match self {
+            SizeBucket::Xs => "(additions + deletions) <= 20",
+            SizeBucket::S => "(additions + deletions) BETWEEN 21 AND 100",
+            SizeBucket::M => "(additions + deletions) BETWEEN 101 AND 400",
+            SizeBucket::L => "(additions + deletions) BETWEEN 401 AND 1000",
+            SizeBucket::Xl => "(additions + deletions) > 1000",
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::fmt::Display for SizeBucket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[cfg(feature = "server")]
+impl std::str::FromStr for SizeBucket {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "xs" => SizeBucket::Xs,
+            "s" => SizeBucket::S,
+            "m" => SizeBucket::M,
+            "l" => SizeBucket::L,
+            "xl" => SizeBucket::Xl,
+            other => anyhow::bail!("unknown size bucket '{other}'"),
+        })
+    }
+}
+
 /// Median gap (days) between consecutive published_at timestamps (any order).
 pub fn cadence_days(dates: &[String]) -> Option<i64> {
     let mut ts: Vec<i64> = dates

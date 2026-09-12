@@ -391,12 +391,7 @@ fn PrRowEl(
     colspan: usize,
 ) -> Element {
     let is_open = expanded() == Some((pr.repo.clone(), pr.number));
-    let age = pr
-        .created_at
-        .as_deref()
-        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_days())
-        .unwrap_or(0);
+    let age = crate::model::days_since_rfc3339(pr.created_at.as_deref());
     let mut assess_err = use_signal(|| Option::<String>::None);
     let mut assessing = use_signal(|| false);
     let repo = pr.repo.clone();

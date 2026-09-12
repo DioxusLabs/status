@@ -4,6 +4,9 @@ use super::cache::use_cached;
 use super::widgets::{format_compact, LineChart, Sparkline};
 use crate::api;
 
+/// How many crates get a downloads chart.
+const TOP_CRATE_CHARTS: usize = 12;
+
 #[component]
 pub fn Health() -> Element {
     let health = use_cached(
@@ -43,7 +46,7 @@ pub fn Health() -> Element {
                     }
                     h2 { "Downloads (90d)" }
                     div { class: "grid two",
-                        for c in h.crates.iter().take(12) {
+                        for c in h.crates.iter().take(TOP_CRATE_CHARTS) {
                             div { class: "card", key: "{c.name}",
                                 h3 {
                                     "{c.name} "
