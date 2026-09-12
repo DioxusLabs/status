@@ -211,22 +211,31 @@ fn ReleaseDetailBody(repo: String) -> Element {
             }
             if d.unreleased.is_empty() {
                 p { class: "muted", "no merged PRs since the last release" }
-            }
-            for g in &d.unreleased {
-                h4 { "{g.label} ({g.prs.len()})" }
-                table { class: "data",
-                    tbody {
-                        for p in &g.prs {
-                            tr { class: "row", key: "{p.id}",
-                                td { class: "mono",
-                                    a { href: "{p.url}", target: "_blank", "#{p.number}" }
-                                }
-                                td { class: "title", "{p.title}" }
-                                td {
-                                    span {
-                                        class: "author {assoc_label(&p.author_association)}",
-                                        title: "{assoc_label(&p.author_association)}",
-                                        "{p.author}"
+            } else {}
+            if !d.unreleased.is_empty() {
+                table { class: "data fixed",
+                    colgroup {
+                        col { style: "width: 90px" }
+                        col {}
+                        col { style: "width: 160px" }
+                    }
+                    for g in &d.unreleased {
+                        tbody {
+                            tr { class: "group",
+                                th { colspan: 3, "{g.label} ({g.prs.len()})" }
+                            }
+                            for p in &g.prs {
+                                tr { class: "row", key: "{p.id}",
+                                    td { class: "mono",
+                                        a { href: "{p.url}", target: "_blank", "#{p.number}" }
+                                    }
+                                    td { class: "title", "{p.title}" }
+                                    td {
+                                        span {
+                                            class: "author {assoc_label(&p.author_association)}",
+                                            title: "{assoc_label(&p.author_association)}",
+                                            "{p.author}"
+                                        }
                                     }
                                 }
                             }

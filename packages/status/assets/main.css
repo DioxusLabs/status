@@ -359,3 +359,12 @@ textarea.crates {
 .progress-fill { height: 100%; background: var(--accent); }
 .target-row { display: flex; gap: 8px; align-items: center; }
 .page h4 { margin: 14px 0 4px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.data.fixed { table-layout: fixed; }
+.data tr.group th {
+    text-align: left;
+    padding: 10px 8px 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}

@@ -928,6 +928,7 @@ pub async fn sync_milestones(repo: &str) -> anyhow::Result<usize> {
         )
         .await?;
     let n = milestones.len();
+    let numbers: Vec<i64> = milestones.iter().map(|m| m.number).collect();
     for m in milestones {
         db::upsert_milestone(
             repo,
@@ -942,6 +943,7 @@ pub async fn sync_milestones(repo: &str) -> anyhow::Result<usize> {
         )
         .await?;
     }
+    db::delete_milestones_not_in(repo, &numbers).await?;
     Ok(n)
 }
 

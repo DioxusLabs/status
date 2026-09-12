@@ -875,6 +875,25 @@ pub async fn upsert_milestone(
     Ok(())
 }
 
+/// Drop milestones for a repo that are no longer open upstream.
+pub async fn delete_milestones_not_in(repo: &str, keep: &[i64]) -> anyhow::Result<()> {
+    if keep.is_empty() {
+        sqlx::query("DELETE FROM milestones WHERE repo = ?")
+            .bind(repo)
+            .execute(pool())
+            .await?;
+        return Ok(());
+    }
+    let placeholders = keep.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("DELETE FROM milestones WHERE repo = ? AND number NOT IN ({placeholders})");
+    let mut q = sqlx::query(&sql).bind(repo);
+    for n in keep {
+        q = q.bind(n);
+    }
+    q.execute(pool()).await?;
+    Ok(())
+}
+
 /// Open milestones for a repo (or all repos), nearest due date first.
 pub async fn list_milestones(repo: Option<&str>) -> anyhow::Result<Vec<MilestoneRow>> {
     let mut sql = String::from(
