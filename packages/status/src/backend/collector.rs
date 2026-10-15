@@ -222,8 +222,8 @@ fn spawn_periodic(kind: &'static str, interval: std::time::Duration, run_immedia
 }
 
 pub fn start() {
-    if env::github_token().is_none() {
-        warn!("GITHUB_TOKEN not set; collectors disabled");
+    if !env::github_configured() {
+        warn!("no GitHub auth configured (GitHub App or GITHUB_TOKEN); collectors disabled");
         return;
     }
     tokio::spawn(async move {

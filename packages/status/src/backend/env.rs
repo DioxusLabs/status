@@ -59,6 +59,11 @@ pub fn github_app_installation_id() -> Option<u64> {
     var("GITHUB_APP_INSTALLATION_ID").and_then(|v| v.trim().parse().ok())
 }
 
+/// Whether either GitHub auth path (App or personal token) is configured.
+pub fn github_configured() -> bool {
+    github_token().is_some() || (github_app_id().is_some() && github_app_private_key().is_some())
+}
+
 pub fn devin_api_key() -> Option<String> {
     var("DEVIN_API_KEY")
 }
