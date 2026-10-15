@@ -1,0 +1,15 @@
+[package]
+name = "dioxus-sdk-time"
+version = "0.7.0"
+edition = "2021"
+description = "Vendored timing shim for dioxus 0.8 (subset of dioxus-sdk-time used by dioxus-primitives)"
+
+[dependencies]
+dioxus = { workspace = true }
+futures = "0.3"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { workspace = true, features = ["time"] }
